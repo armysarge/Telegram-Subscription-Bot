@@ -4,6 +4,9 @@ const dotenv = require('dotenv');
 // Load environment variables
 dotenv.config();
 
+// Set strictQuery option to suppress deprecation warning
+mongoose.set('strictQuery', false);
+
 // MongoDB connection string
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/telegram-subscription-bot';
 

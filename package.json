@@ -1,14 +1,17 @@
 {
   "name": "telegram-subscription-bot",
   "version": "1.0.0",
-  "description": "A Telegram bot that handles subscriptions and manages access to premium group content",
+  "description": "A Telegram bot for managing subscriptions with PayFast",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
     "dev": "nodemon bot.js",
     "setup-db": "node setup-database.js",
     "check-db": "node check-db-connection.js",
-    "start:prod": "node bot.min.js"
+    "start:prod": "node bot.min.js",
+    "config-mongo": "node mongo-config.js",
+    "start:with-config": "node mongo-config.js && node bot.js",
+    "dev:with-config": "node mongo-config.js && nodemon bot.js"
   },
   "keywords": [
     "telegram",
@@ -19,11 +22,14 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "dotenv": "^16.0.3",
-    "mongoose": "^6.9.0",
-    "telegraf": "^4.12.2"
+    "axios": "^1.8.4",
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.3.1",
+    "express": "^4.21.2",
+    "mongoose": "^7.6.3",
+    "telegraf": "^4.15.0"
   },
   "devDependencies": {
-    "nodemon": "^2.0.20"
+    "nodemon": "^3.0.1"
   }
 }

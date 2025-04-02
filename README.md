@@ -4,20 +4,24 @@ A Telegram bot that handles payments and subscription management for groups and 
 
 ## Features
 
-- Payment processing through Telegram's built-in payment system
+- Payment processing through PayFast integration
+- One-time and recurring subscription options
 - Subscription management for both groups and channels
 - Automatic message filtering for non-subscribers
-- Subscription status tracking
+- Subscription status tracking and expiration management
 - Notification system for users when their messages are hidden
 - Admin dashboard with subscription statistics
+- Customizable subscription pricing and plans
+- Direct channel management with `/manage_this_channel` command
 - Customizable welcome messages
+- Support for multiple payment providers (through modular design)
 
 ## Prerequisites
 
 - Node.js (v12 or higher)
 - MongoDB
 - A Telegram Bot Token from [@BotFather](https://t.me/BotFather)
-- A Payment Provider Token (also from @BotFather)
+- PayFast merchant account and API credentials
 
 ## Quick Installation
 
@@ -129,14 +133,18 @@ sudo systemctl start mongod
    ```
    BOT_TOKEN=your_telegram_bot_token
    MONGODB_URI=mongodb://localhost:27017/telegram-subscription-bot
-   PAYMENT_PROVIDER_TOKEN=your_payment_provider_token
+   PAYFAST_MERCHANT_ID=your_payfast_merchant_id
+   PAYFAST_MERCHANT_KEY=your_payfast_merchant_key
+   PAYFAST_PASSPHRASE=your_payfast_passphrase
+   PAYFAST_SANDBOX=true
+   PAYFAST_RETURN_URL=https://t.me/your_bot_username
+   PAYFAST_CANCEL_URL=https://t.me/your_bot_username
+   PAYFAST_NOTIFY_URL=https://your-server.com/payfast-itn
    ```
 
 4. Set up your bot with BotFather:
    - Create a new bot with `/newbot`
-   - Enable payments with `/mybots` > [your bot] > Payments
-   - Choose a payment provider and follow the instructions
-   - Copy the payment provider token to your `.env` file
+   - Enable inline mode and group privacy mode based on your needs
 
 5. Initialize the database:
    ```
@@ -188,6 +196,11 @@ If you prefer a cloud-based MongoDB solution:
 - `/admin_toggle` - Toggle subscription requirement on/off
 - `/admin_welcome [message]` - Set custom welcome message
 - `/admin_stats` - View subscription statistics for your group/channel
+- `/admin_subscription` - Configure subscription settings
+- `/admin_payment` - Configure payment options
+- `/manage_this_channel` - Directly manage channel settings (in channels)
+- `/manage_channel` - Manage your channels (in private chat with bot)
+- `/add_admin @username` - Add another admin to the bot's database
 
 ## Setting Up in a Group
 
@@ -199,30 +212,31 @@ If you prefer a cloud-based MongoDB solution:
 ## Setting Up in a Channel
 
 1. Add the bot to your channel as an administrator
-2. The bot will automatically start tracking channel members
-3. Use `/admin` in the channel to configure settings
-4. When new users join the channel, they'll be prompted to subscribe if required
+2. Use `/manage_this_channel` in the channel to access management options
+3. Configure subscription settings, pricing, and welcome messages
+4. When members type `/subscribe` in the channel, they'll be prompted to start a private chat with the bot to complete their subscription
 
-## How It Works
+## Channel Subscription Management
 
-### In Groups
-1. When a user joins the group, they won't be able to see messages from other users
-2. If they try to send a message without a subscription, it will be deleted
-3. The bot will send them a private message explaining why their message was hidden
-4. Once they subscribe via the `/subscribe` command and complete the payment, they gain full access to the group
+The new `/manage_this_channel` command provides an interactive way to manage channel subscriptions:
 
-### In Channels
-1. When a user joins the channel, the bot tracks their membership
-2. The bot sends a welcome message with subscription information if needed
-3. Channel admins can customize the welcome message and toggle subscription requirements
-4. Admins can view subscription statistics for their channel
+1. **Direct Channel Management**: Send the command in your channel, and the bot will provide a management panel
+2. **Subscription Settings**: Toggle subscription requirements on/off, set pricing for one-time and recurring subscriptions
+3. **Welcome Messages**: Create custom messages for new subscribers
+4. **Statistics**: View detailed information about subscribers and conversion rates
+5. **Admin Management**: Add other channel administrators to help manage subscriptions
 
-## Development
+When a user types `/subscribe` in your channel, the bot will now respond with instructions and a direct link to start the subscription process.
 
-For development with hot reloading:
-```
-npm run dev
-```
+## PayFast Integration
+
+This bot uses PayFast for payment processing. To set up PayFast:
+
+1. Create a PayFast merchant account at [PayFast.co.za](https://www.payfast.co.za/)
+2. Get your merchant ID, merchant key, and set a passphrase in your PayFast dashboard
+3. Configure your return and cancel URLs to point to your bot
+4. For testing, use the sandbox mode (`PAYFAST_SANDBOX=true`)
+5. For production, set up a web server to handle IPNs (Instant Payment Notifications)
 
 ## Database Management
 
@@ -235,6 +249,22 @@ To restore from backup:
 ```
 mongorestore --db telegram-subscription-bot ./backup/telegram-subscription-bot
 ```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Subscription commands not working in channels**: Make sure the bot has been added as an administrator to the channel.
+
+2. **Messages not being filtered**: Check that the bot has delete message permissions in groups.
+
+3. **Payment not completing**: Verify your PayFast API credentials and ensure the sandbox mode is set correctly.
+
+4. **Database connection failures**: Check your MongoDB connection string and ensure the database is running.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
