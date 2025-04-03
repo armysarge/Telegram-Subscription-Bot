@@ -1,4 +1,5 @@
 const { Telegraf, session } = require('telegraf');
+const { message } = require('telegraf/filters');
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const express = require('express');
@@ -48,76 +49,145 @@ mongoose.connect(process.env.MONGODB_URI, {
     useUnifiedTopology: true
 }).then(() => {
     console.log('Connected to MongoDB');
+
+    // Add step-by-step debugging logs
+    console.log('Initializing session middleware...');
+
+    try {
+        // Add session middleware with proper error handling
+        bot.use(session({
+            // Customize session to make it more robust
+            getSessionKey: (ctx) => {
+                // Use a combination of chat ID and user ID to create a unique key
+                const chatId = ctx.chat?.id.toString();
+                const userId = ctx.from?.id.toString();
+
+                if (chatId && userId) {
+                    return `${chatId}:${userId}`;
+                } else if (userId) {
+                    return userId;
+                }
+
+                return null; // No session
+            }
+        })); // Ensure session middleware is added here
+
+        // Debugging to confirm session middleware is working
+        bot.use((ctx, next) => {
+            console.log('Session middleware triggered');
+            console.log('Session state before handler:', JSON.stringify(ctx.session || {}));
+
+            // Also log chat and user info for debugging purposes
+            if (ctx.chat) {
+                console.log('Chat info:', {
+                    id: ctx.chat.id,
+                    type: ctx.chat.type,
+                    title: ctx.chat.title
+                });
+            }
+
+            if (ctx.from) {
+                console.log('From user:', {
+                    id: ctx.from.id,
+                    username: ctx.from.username,
+                    first_name: ctx.from.first_name
+                });
+            }
+
+            return next();
+        });
+
+        console.log('Session middleware initialized');
+
+        console.log('Initializing user tracking middleware...');
+        bot.use(userMiddleware);
+        console.log('User tracking middleware initialized');
+
+        // Register handlers with proper error handling
+        console.log('Registering command handlers...');
+        commandHandlers.register(bot, paymentManager);
+        console.log('Command handlers registered');
+
+        console.log('Registering group handlers...');
+        groupHandlers.register(bot);
+        console.log('Group handlers registered');
+
+        console.log('Registering message handlers...');
+        messageHandlers.register(bot);
+        console.log('Message handlers registered');
+
+        console.log('Registering callback handlers...');
+        callbackHandlers.register(bot);
+        console.log('Callback handlers registered');
+
+        // Set up payment provider webhooks
+        console.log('Setting up payment webhooks...');
+        paymentManager.setupWebhooks(app, async (paymentData) => {
+            console.log('Processing successful payment:', paymentData);
+
+            const User = require('./models/user');
+            const Payment = require('./models/payment');
+
+            try {
+                // Save payment record
+                await new Payment({
+                    userId: paymentData.userId,
+                    amount: paymentData.amount,
+                    currency: paymentData.currency,
+                    paymentId: paymentData.paymentId,
+                    status: paymentData.status,
+                    providerName: paymentData.providerName,
+                    isSubscription: paymentData.isSubscription || false
+                }).save();
+
+                // Update user subscription status
+                const subscriptionDuration = process.env.SUBSCRIPTION_DURATION_DAYS || 30;
+                const expiryDate = new Date();
+                expiryDate.setDate(expiryDate.getDate() + subscriptionDuration);
+
+                await User.findOneAndUpdate(
+                    { userId: paymentData.userId },
+                    {
+                        isSubscribed: true,
+                        subscriptionExpiresAt: expiryDate
+                    }
+                );
+
+                console.log(`Updated subscription for user ${paymentData.userId}`);
+            } catch (err) {
+                console.error('Error processing payment:', err);
+            }
+        });
+        console.log('Payment webhooks configured');
+
+        // Start the Express server for webhooks
+        const PORT = process.env.PORT || 3000;
+        console.log('Starting Express server on port', PORT);
+        app.listen(PORT, () => {
+            console.log(`Express server is running on port ${PORT}`);
+
+            // Start the bot after everything else is ready
+            console.log('Launching bot...');
+
+            bot.launch();
+        });
+
+    } catch (error) {
+        console.error('Error during bot initialization:', error);
+        process.exit(1);
+    }
+
 }).catch(err => {
     console.error('MongoDB connection error:', err);
     process.exit(1); // Exit if MongoDB connection fails
 });
 
-// Add session middleware
-bot.use(session());
-
-// Add user tracking middleware
-bot.use(userMiddleware);
-
-// Register command handlers
-commandHandlers.register(bot, paymentManager);
-
-// Register group handlers
-groupHandlers.register(bot);
-
-// Register message handlers
-messageHandlers.register(bot);
-
-// Register callback query handlers
-callbackHandlers.register(bot);
-
-// Set up payment provider webhooks
-paymentManager.setupWebhooks(app, async (paymentData) => {
-    console.log('Processing successful payment:', paymentData);
-
-    const User = require('./models/user');
-    const Payment = require('./models/payment');
-
-    try {
-        // Save payment record
-        await new Payment({
-            userId: paymentData.userId,
-            amount: paymentData.amount,
-            currency: paymentData.currency,
-            paymentId: paymentData.paymentId,
-            status: paymentData.status,
-            providerName: paymentData.providerName,
-            isSubscription: paymentData.isSubscription || false
-        }).save();
-
-        // Update user subscription status
-        const subscriptionDuration = process.env.SUBSCRIPTION_DURATION_DAYS || 30;
-        const expiryDate = new Date();
-        expiryDate.setDate(expiryDate.getDate() + subscriptionDuration);
-
-        await User.findOneAndUpdate(
-            { userId: paymentData.userId },
-            {
-                isSubscribed: true,
-                subscriptionExpiresAt: expiryDate
-            }
-        );
-
-        console.log(`Updated subscription for user ${paymentData.userId}`);
-    } catch (err) {
-        console.error('Error processing payment:', err);
-    }
+// Add graceful shutdown
+process.once('SIGINT', () => {
+    console.log('SIGINT received, shutting down bot...');
+    bot.stop('SIGINT');
 });
-
-// Start the Express server for webhooks
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Express server is running on port ${PORT}`);
-});
-
-// Start the bot
-bot.launch().then(() => {
-    console.log('Bot is running');
-}).catch(err => {
-    console.error('Error starting bot:', err);
+process.once('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down bot...');
+    bot.stop('SIGTERM');
 });

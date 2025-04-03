@@ -1,5 +1,6 @@
 const User = require('../models/user');
 const Group = require('../models/group');
+const { message } = require('telegraf/filters'); // Add this import for message filters
 
 // Helper function to verify admin status
 async function verifyAdmin(ctx, chatId) {
@@ -14,6 +15,20 @@ async function verifyAdmin(ctx, chatId) {
 }
 
 const register = (bot) => {
+    // Debugging catch-all at the VERY beginning
+    bot.catch((err, ctx) => {
+        console.error('Bot error encountered:', err);
+        console.log('Error context:', ctx?.updateType, ctx?.update);
+    });
+
+    // Add a special debug command to test handler
+    bot.command('debugtext', (ctx) => {
+        console.log('Debug command received');
+        ctx.session = ctx.session || {};
+        ctx.session.awaitingPriceFor = 'DEBUG';
+        return ctx.reply('Debug mode activated. Please send any text message to test the handler.');
+    });
+
     // Admin dashboard callbacks
     bot.action('admin_toggle', async (ctx) => {
         const { isAdmin } = ctx.state;
@@ -284,15 +299,19 @@ const register = (bot) => {
                 return ctx.answerCbQuery('Group not found in database');
             }
 
-            ctx.session = ctx.session || {};
-            ctx.session.awaitingPriceFor = groupId;
+            ctx.session = ctx.session || {}; // Ensure session is initialized
+            ctx.session.awaitingPriceFor = groupId; // Set the session state
+
+            console.log('Session updated: awaitingPriceFor set to', groupId); // Debugging log
 
             await ctx.answerCbQuery();
             await ctx.reply(
                 `Please enter the monthly subscription price for users of your group.\n\n` +
                 `Current price: ${group.subscriptionPrice || 'Not set'} ${group.subscriptionCurrency || 'ZAR'}\n\n` +
-                `Reply with just the number (e.g., "50" for ${group.subscriptionCurrency || 'ZAR'} 50).`
+                `Reply with just the number (e.g., "50" for ${group.subscriptionCurrency || 'ZAR'} 50).\n\n` +
+                `⚠️ IMPORTANT: Please send a new message with just the price amount.`
             );
+
         } catch (err) {
             console.error('Error in set group price callback:', err);
             await ctx.answerCbQuery('An error occurred');
@@ -457,114 +476,148 @@ const register = (bot) => {
     });
 
     // Handle welcome message text input
+    // Enhanced text handler with better debugging
     bot.on('text', async (ctx) => {
-        // Skip if we're not expecting a welcome message
-        if (!ctx.session?.awaitingWelcomeFor) return;
+        // Add comprehensive debugging at the start
+        console.log('Text handler triggered');
+        console.log('Session state:', JSON.stringify(ctx.session || {}));
+        console.log('Message text:', ctx.message.text);
 
-        const messageText = ctx.message.text;
-        const groupId = ctx.session.awaitingWelcomeFor;
-
-        // Handle cancel command
-        if (messageText === '/cancel') {
-            delete ctx.session.awaitingWelcomeFor;
-            return ctx.reply('Welcome message update canceled.');
+        // Skip if not expecting any input
+        if (!ctx.session?.awaitingWelcomeFor && !ctx.session?.awaitingPriceFor && !ctx.session?.configuringPaymentFor) {
+            console.log('No pending input expected, skipping handler');
+            return;
         }
 
         try {
-            await Group.findOneAndUpdate(
-                { groupId: groupId },
-                { welcomeMessage: messageText }
-            );
-
-            delete ctx.session.awaitingWelcomeFor;
-            await ctx.reply('Welcome message updated successfully!');
-        } catch (err) {
-            console.error('Error saving welcome message:', err);
-            await ctx.reply('Failed to update welcome message. Please try again.');
-        }
-    });
-
-    // Handle subscription price input
-    bot.on('text', async (ctx) => {
-        // Handle welcome message updates (existing code)
-        if (ctx.session?.awaitingWelcomeFor) {
             const messageText = ctx.message.text;
-            const groupId = ctx.session.awaitingWelcomeFor;
 
-            // Handle cancel command
-            if (messageText === '/cancel') {
-                delete ctx.session.awaitingWelcomeFor;
-                return ctx.reply('Welcome message update canceled.');
+            // Handle subscription price input
+            if (ctx.session?.awaitingPriceFor) {
+                console.log('Processing price input for group:', ctx.session.awaitingPriceFor);
+                const groupId = ctx.session.awaitingPriceFor;
+
+                // Handle cancel command
+                if (messageText.toLowerCase() === '/cancel') {
+                    console.log('Price update canceled');
+                    delete ctx.session.awaitingPriceFor;
+                    const keyboard = {
+                        inline_keyboard: [[
+                            { text: 'Back to Registration', callback_data: `register_group:${groupId}` }
+                        ]]
+                    };
+                    return ctx.reply('Price update canceled.', { reply_markup: keyboard });
+                }
+
+                // Validate price
+                const price = parseFloat(messageText);
+                console.log('Parsed price:', price, 'from input:', messageText);
+
+                if (isNaN(price) || price <= 0) {
+                    console.log('Invalid price entered');
+                    return ctx.reply('Please enter a valid price (a positive number).');
+                }
+
+                try {
+                    console.log('Updating group with price:', price);
+                    // Update group with new price
+                    await Group.findOneAndUpdate(
+                        { groupId },
+                        {
+                            subscriptionPrice: price,
+                            subscriptionCurrency: 'ZAR'
+                        }
+                    );
+
+                    console.log('Group updated, clearing session state');
+                    delete ctx.session.awaitingPriceFor;
+
+                    const keyboard = {
+                        inline_keyboard: [[
+                            { text: 'Back to Registration', callback_data: `register_group:${groupId}` }
+                        ]]
+                    };
+
+                    await ctx.reply(
+                        `✅ Subscription price set to ${price} ZAR successfully!`,
+                        { reply_markup: keyboard }
+                    );
+                    console.log('Price update confirmation sent');
+                } catch (dbError) {
+                    console.error('Database error while saving price:', dbError);
+                    await ctx.reply('Failed to save the subscription price. Please try again.');
+                }
+                return;
             }
 
-            try {
-                await Group.findOneAndUpdate(
-                    { groupId: groupId },
-                    { welcomeMessage: messageText }
-                );
+            // Handle welcome message updates
+            if (ctx.session?.awaitingWelcomeFor) {
+                const groupId = ctx.session.awaitingWelcomeFor;
+                const fromManagementMenu = ctx.session.fromManagementMenu;
 
-                delete ctx.session.awaitingWelcomeFor;
-                await ctx.reply('Welcome message updated successfully!');
-            } catch (err) {
-                console.error('Error saving welcome message:', err);
-                await ctx.reply('Failed to update welcome message. Please try again.');
-            }
-            return;
-        }
+                // Handle cancel command
+                if (messageText.toLowerCase() === '/cancel') {
+                    delete ctx.session.awaitingWelcomeFor;
+                    delete ctx.session.fromManagementMenu;
 
-        // Handle subscription price input
-        if (ctx.session?.awaitingPriceFor) {
-            const messageText = ctx.message.text;
-            const groupId = ctx.session.awaitingPriceFor;
-
-            // Validate price
-            const price = parseFloat(messageText);
-            if (isNaN(price) || price <= 0) {
-                return ctx.reply('Please enter a valid price (a positive number).');
-            }
-
-            try {
-                await Group.findOneAndUpdate(
-                    { groupId },
-                    {
-                        subscriptionPrice: price,
-                        subscriptionCurrency: 'ZAR' // Default to ZAR, can make this configurable
+                    if (fromManagementMenu) {
+                        const keyboard = {
+                            inline_keyboard: [[
+                                { text: 'Back to Group Management', callback_data: `manage_group:${groupId}` }
+                            ]]
+                        };
+                        return ctx.reply('Welcome message update canceled.', { reply_markup: keyboard });
                     }
-                );
+                    return ctx.reply('Welcome message update canceled.');
+                }
 
-                delete ctx.session.awaitingPriceFor;
+                try {
+                    await Group.findOneAndUpdate(
+                        { groupId },
+                        { welcomeMessage: messageText }
+                    );
 
-                // Send back to registration menu
-                const keyboard = {
-                    inline_keyboard: [
-                        [{ text: 'Back to Registration', callback_data: `register_group:${groupId}` }]
-                    ]
-                };
+                    delete ctx.session.awaitingWelcomeFor;
+                    delete ctx.session.fromManagementMenu;
 
-                await ctx.reply(
-                    `Subscription price set to ${price} ZAR successfully!`,
-                    { reply_markup: keyboard }
-                );
-            } catch (err) {
-                console.error('Error saving subscription price:', err);
-                await ctx.reply('Failed to update subscription price. Please try again.');
+                    if (fromManagementMenu) {
+                        const keyboard = {
+                            inline_keyboard: [[
+                                { text: 'Back to Group Management', callback_data: `manage_group:${groupId}` }
+                            ]]
+                        };
+                        return ctx.reply('Welcome message updated successfully!', { reply_markup: keyboard });
+                    }
+
+                    await ctx.reply('Welcome message updated successfully!');
+                } catch (err) {
+                    console.error('Error saving welcome message:', err);
+                    await ctx.reply('Failed to update welcome message. Please try again.');
+                }
+                return;
             }
-            return;
-        }
 
-        // Handle PayFast configuration
-        if (ctx.session?.configuringPaymentFor) {
-            const messageText = ctx.message.text;
-            const { groupId, step } = ctx.session.configuringPaymentFor;
+            // Handle PayFast configuration
+            if (ctx.session?.configuringPaymentFor) {
+                const { groupId, step } = ctx.session.configuringPaymentFor;
 
-            try {
+                // Handle cancel command
+                if (messageText.toLowerCase() === '/cancel') {
+                    delete ctx.session.configuringPaymentFor;
+                    const keyboard = {
+                        inline_keyboard: [[
+                            { text: 'Back to Payment Settings', callback_data: `payment_method:${groupId}:payfast` }
+                        ]]
+                    };
+                    return ctx.reply('PayFast configuration canceled.', { reply_markup: keyboard });
+                }
+
                 if (step === 'merchant_id') {
                     // Update merchant ID and move to next step
                     await Group.findOneAndUpdate(
                         { groupId },
-                        {
-                            'customPaymentSettings.payfast.merchantId': messageText
-                        }
+                        { $set: { 'customPaymentSettings.payfast.merchantId': messageText } },
+                        { upsert: true }
                     );
 
                     // Update session to next step
@@ -578,9 +631,8 @@ const register = (bot) => {
                     // Update merchant key and move to final step
                     await Group.findOneAndUpdate(
                         { groupId },
-                        {
-                            'customPaymentSettings.payfast.merchantKey': messageText
-                        }
+                        { $set: { 'customPaymentSettings.payfast.merchantKey': messageText } },
+                        { upsert: true }
                     );
 
                     // Update session to next step
@@ -595,9 +647,8 @@ const register = (bot) => {
                     if (messageText.toLowerCase() !== 'skip') {
                         await Group.findOneAndUpdate(
                             { groupId },
-                            {
-                                'customPaymentSettings.payfast.passPhrase': messageText
-                            }
+                            { $set: { 'customPaymentSettings.payfast.passPhrase': messageText } },
+                            { upsert: true }
                         );
                     }
 
@@ -606,21 +657,22 @@ const register = (bot) => {
 
                     // Send back to registration menu
                     const keyboard = {
-                        inline_keyboard: [
-                            [{ text: 'Back to Registration', callback_data: `register_group:${groupId}` }]
-                        ]
+                        inline_keyboard: [[
+                            { text: 'Continue Registration', callback_data: `register_group:${groupId}` }
+                        ]]
                     };
 
                     await ctx.reply(
-                        `PayFast configuration complete! Your users will now be able to pay with PayFast.`,
+                        `✅ PayFast configuration complete!\n\nClick below to continue with the registration:`,
                         { reply_markup: keyboard }
                     );
                 }
-            } catch (err) {
-                console.error('Error saving payment configuration:', err);
-                await ctx.reply('Failed to update payment settings. Please try again.');
+                return;
             }
-            return;
+        } catch (err) {
+            console.error('Error handling text input:', err);
+            console.error('Error details:', err.stack); // Add stack trace for better debugging
+            await ctx.reply('An error occurred while processing your input. Please try again.');
         }
     });
 
@@ -973,6 +1025,7 @@ const register = (bot) => {
                 {
                     parse_mode: 'Markdown',
                     reply_markup: keyboard
+
                 }
             );
         } catch (err) {
@@ -1116,73 +1169,6 @@ const register = (bot) => {
         } catch (err) {
             console.error('Error in group_stats callback:', err);
             await ctx.answerCbQuery('An error occurred');
-        }
-    });
-
-    // Enhanced text handler to support welcome message updates from management menu
-    bot.on('text', async (ctx) => {
-        // Skip if not expecting any input
-        if (!ctx.session?.awaitingWelcomeFor && !ctx.session?.awaitingPriceFor && !ctx.session?.configuringPaymentFor) {
-            return;
-        }
-
-        // Handle welcome message updates
-        if (ctx.session?.awaitingWelcomeFor) {
-            const messageText = ctx.message.text;
-            const groupId = ctx.session.awaitingWelcomeFor;
-            const fromManagementMenu = ctx.session.fromManagementMenu;
-
-            // Handle cancel command
-            if (messageText.toLowerCase() === '/cancel') {
-                delete ctx.session.awaitingWelcomeFor;
-                delete ctx.session.fromManagementMenu;
-
-                if (fromManagementMenu) {
-                    const keyboard = {
-                        inline_keyboard: [[
-                            { text: 'Back to Group Management', callback_data: `manage_group:${groupId}` }
-                        ]]
-                    };
-                    return ctx.reply('Welcome message update canceled.', { reply_markup: keyboard });
-                }
-                return ctx.reply('Welcome message update canceled.');
-            }
-
-            try {
-                await Group.findOneAndUpdate(
-                    { groupId },
-                    { welcomeMessage: messageText }
-                );
-
-                delete ctx.session.awaitingWelcomeFor;
-                delete ctx.session.fromManagementMenu;
-
-                // If update was from management menu, provide button to go back
-                if (fromManagementMenu) {
-                    const keyboard = {
-                        inline_keyboard: [[
-                            { text: 'Back to Group Management', callback_data: `manage_group:${groupId}` }
-                        ]]
-                    };
-                    return ctx.reply('Welcome message updated successfully!', { reply_markup: keyboard });
-                }
-
-                await ctx.reply('Welcome message updated successfully!');
-            } catch (err) {
-                console.error('Error saving welcome message:', err);
-                await ctx.reply('Failed to update welcome message. Please try again.');
-            }
-            return;
-        }
-
-        // Handle subscription price input
-        if (ctx.session?.awaitingPriceFor) {
-            // ...existing price handling code...
-        }
-
-        // Handle PayFast configuration
-        if (ctx.session?.configuringPaymentFor) {
-            // ...existing PayFast config handling code...
         }
     });
 };

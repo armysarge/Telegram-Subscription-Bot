@@ -1,5 +1,6 @@
 const User = require('../models/user');
 const Group = require('../models/group');
+const { message } = require('telegraf/filters'); // Add this import for message filters
 
 // Command handlers
 const register = (bot, paymentManager) => {
@@ -139,26 +140,6 @@ const register = (bot, paymentManager) => {
         }
     });
 
-    // Admin command
-    bot.command('admin', async (ctx) => {
-        const { isAdmin } = ctx.state;
-        if (!isAdmin) {
-            return ctx.reply('Sorry, this command is only available to administrators.');
-        }
-
-        const keyboard = {
-            inline_keyboard: [
-                [{ text: 'Toggle Subscription', callback_data: 'admin_toggle' }],
-                [{ text: 'Set Welcome Message', callback_data: 'admin_welcome' }],
-                [{ text: 'View Stats', callback_data: 'admin_stats' }],
-                [{ text: 'Configure Subscription', callback_data: 'admin_subscription' }],
-                [{ text: 'Configure Payment', callback_data: 'admin_payment' }]
-            ]
-        };
-
-        await ctx.reply('Admin Dashboard:', { reply_markup: keyboard });
-    });
-
     // Subscribe command
     bot.command('subscribe', async (ctx) => {
         const User = require('../models/user');
@@ -283,62 +264,306 @@ const register = (bot, paymentManager) => {
 
     // Admin toggle command
     bot.command('admin_toggle', async (ctx) => {
-        const { isAdmin } = ctx.state;
-        if (!isAdmin) {
-            return ctx.reply('Sorry, this command is only available to administrators.');
+        try {
+            const chat = await ctx.getChat();
+
+            if (chat.type === 'private') {
+                return ctx.reply('This command can only be used in groups.');
+            }
+
+            // Directly check admin status instead of using ctx.state.isAdmin
+            const userId = ctx.from.id;
+            const chatId = chat.id;
+
+            let isAdmin = false;
+            try {
+                const admins = await ctx.telegram.getChatAdministrators(chatId);
+                isAdmin = admins.some(admin => admin.user.id === userId);
+            } catch (err) {
+                console.error('Error checking admin status:', err);
+                return ctx.reply('An error occurred while checking your administrator status.');
+            }
+
+            if (!isAdmin) {
+                return ctx.reply('Sorry, this command is only available to administrators.');
+            }
+
+            let group = await Group.findOne({ groupId: chatId });
+            if (!group) {
+                group = new Group({
+                    groupId: chatId,
+                    groupTitle: chat.title,
+                    adminUsers: [userId]  // Add the admin to the group's admin list
+                });
+            } else if (!group.adminUsers.includes(userId)) {
+                // Make sure the admin is in the group's admin list
+                group.adminUsers.push(userId);
+            }
+
+            // Check if the group is registered
+            if (!group.isRegistered && !group.subscriptionRequired) {
+                return ctx.reply('This group is not registered. Please register the group before enabling subscriptions.');
+            }
+
+            group.subscriptionRequired = !group.subscriptionRequired;
+            await group.save();
+
+            await ctx.reply(`Subscription requirement has been ${group.subscriptionRequired ? 'enabled' : 'disabled'} for this group.`);
+        } catch (err) {
+            console.error('Error in admin_toggle command:', err);
+            ctx.reply('An error occurred while processing the command.');
         }
-
-        const Group = require('../models/group');
-        const chat = await ctx.getChat();
-
-        if (chat.type === 'private') {
-            return ctx.reply('This command can only be used in groups.');
-        }
-
-        let group = await Group.findOne({ groupId: chat.id });
-        if (!group) {
-            group = new Group({ groupId: chat.id });
-        }
-
-        // Check if the group is registered
-        if (!group.isRegistered && !group.subscriptionRequired) {
-            return ctx.reply('This group is not registered. Please register the group before enabling subscriptions.');
-        }
-
-        group.subscriptionRequired = !group.subscriptionRequired;
-        await group.save();
-
-        await ctx.reply(`Subscription requirement has been ${group.subscriptionRequired ? 'enabled' : 'disabled'} for this group.`);
     });
 
-    // Admin welcome command
+    // Admin welcome command - update with the same admin check pattern
     bot.command('admin_welcome', async (ctx) => {
-        const { isAdmin } = ctx.state;
-        if (!isAdmin) {
-            return ctx.reply('Sorry, this command is only available to administrators.');
+        try {
+            const chat = await ctx.getChat();
+
+            if (chat.type === 'private') {
+                return ctx.reply('This command can only be used in groups.');
+            }
+
+            // Directly check admin status
+            const userId = ctx.from.id;
+            const chatId = chat.id;
+
+            let isAdmin = false;
+            try {
+                const admins = await ctx.telegram.getChatAdministrators(chatId);
+                isAdmin = admins.some(admin => admin.user.id === userId);
+            } catch (err) {
+                console.error('Error checking admin status:', err);
+                return ctx.reply('An error occurred while checking your administrator status.');
+            }
+
+            if (!isAdmin) {
+                return ctx.reply('Sorry, this command is only available to administrators.');
+            }
+
+            const messageText = ctx.message.text.split('/admin_welcome ')[1];
+            if (!messageText) {
+                return ctx.reply('Please provide a welcome message. Example:\n/admin_welcome Welcome to our group!');
+            }
+
+            let group = await Group.findOne({ groupId: chatId });
+            if (!group) {
+                group = new Group({
+                    groupId: chatId,
+                    groupTitle: chat.title,
+                    adminUsers: [userId]
+                });
+            } else if (!group.adminUsers.includes(userId)) {
+                group.adminUsers.push(userId);
+            }
+
+            group.welcomeMessage = messageText;
+            await group.save();
+
+            await ctx.reply('Welcome message has been updated.');
+        } catch (err) {
+            console.error('Error in admin_welcome command:', err);
+            ctx.reply('An error occurred while processing the command.');
+        }
+    });
+
+    bot.on('text', async (ctx) => {
+        // Add comprehensive debugging at the start
+        console.log('Text handler triggered');
+        console.log('Session state:', JSON.stringify(ctx.session || {}));
+        console.log('Message text:', ctx.message.text);
+
+        // Skip if not expecting any input
+        if (!ctx.session?.awaitingWelcomeFor && !ctx.session?.awaitingPriceFor && !ctx.session?.configuringPaymentFor) {
+            console.log('No pending input expected, skipping handler');
+            return;
         }
 
-        const message = ctx.message.text.split('/admin_welcome ')[1];
-        if (!message) {
-            return ctx.reply('Please provide a welcome message. Example:\n/admin_welcome Welcome to our group!');
+        try {
+            const messageText = ctx.message.text;
+
+            // Handle subscription price input
+            if (ctx.session?.awaitingPriceFor) {
+                console.log('Processing price input for group:', ctx.session.awaitingPriceFor);
+                const groupId = ctx.session.awaitingPriceFor;
+
+                // Handle cancel command
+                if (messageText.toLowerCase() === '/cancel') {
+                    console.log('Price update canceled');
+                    delete ctx.session.awaitingPriceFor;
+                    const keyboard = {
+                        inline_keyboard: [[
+                            { text: 'Back to Registration', callback_data: `register_group:${groupId}` }
+                        ]]
+                    };
+                    return ctx.reply('Price update canceled.', { reply_markup: keyboard });
+                }
+
+                // Validate price
+                const price = parseFloat(messageText);
+                console.log('Parsed price:', price, 'from input:', messageText);
+
+                if (isNaN(price) || price <= 0) {
+                    console.log('Invalid price entered');
+                    return ctx.reply('Please enter a valid price (a positive number).');
+                }
+
+                try {
+                    console.log('Updating group with price:', price);
+                    // Update group with new price
+                    await Group.findOneAndUpdate(
+                        { groupId },
+                        {
+                            subscriptionPrice: price,
+                            subscriptionCurrency: 'ZAR'
+                        }
+                    );
+
+                    console.log('Group updated, clearing session state');
+                    delete ctx.session.awaitingPriceFor;
+
+                    const keyboard = {
+                        inline_keyboard: [[
+                            { text: 'Back to Registration', callback_data: `register_group:${groupId}` }
+                        ]]
+                    };
+
+                    await ctx.reply(
+                        `✅ Subscription price set to ${price} ZAR successfully!`,
+                        { reply_markup: keyboard }
+                    );
+                    console.log('Price update confirmation sent');
+                } catch (dbError) {
+                    console.error('Database error while saving price:', dbError);
+                    await ctx.reply('Failed to save the subscription price. Please try again.');
+                }
+                return;
+            }
+
+            // Handle welcome message updates
+            if (ctx.session?.awaitingWelcomeFor) {
+                const groupId = ctx.session.awaitingWelcomeFor;
+                const fromManagementMenu = ctx.session.fromManagementMenu;
+
+                // Handle cancel command
+                if (messageText.toLowerCase() === '/cancel') {
+                    delete ctx.session.awaitingWelcomeFor;
+                    delete ctx.session.fromManagementMenu;
+
+                    if (fromManagementMenu) {
+                        const keyboard = {
+                            inline_keyboard: [[
+                                { text: 'Back to Group Management', callback_data: `manage_group:${groupId}` }
+                            ]]
+                        };
+                        return ctx.reply('Welcome message update canceled.', { reply_markup: keyboard });
+                    }
+                    return ctx.reply('Welcome message update canceled.');
+                }
+
+                try {
+                    await Group.findOneAndUpdate(
+                        { groupId },
+                        { welcomeMessage: messageText }
+                    );
+
+                    delete ctx.session.awaitingWelcomeFor;
+                    delete ctx.session.fromManagementMenu;
+
+                    if (fromManagementMenu) {
+                        const keyboard = {
+                            inline_keyboard: [[
+                                { text: 'Back to Group Management', callback_data: `manage_group:${groupId}` }
+                            ]]
+                        };
+                        return ctx.reply('Welcome message updated successfully!', { reply_markup: keyboard });
+                    }
+
+                    await ctx.reply('Welcome message updated successfully!');
+                } catch (err) {
+                    console.error('Error saving welcome message:', err);
+                    await ctx.reply('Failed to update welcome message. Please try again.');
+                }
+                return;
+            }
+
+            // Handle PayFast configuration
+            if (ctx.session?.configuringPaymentFor) {
+                const { groupId, step } = ctx.session.configuringPaymentFor;
+
+                // Handle cancel command
+                if (messageText.toLowerCase() === '/cancel') {
+                    delete ctx.session.configuringPaymentFor;
+                    const keyboard = {
+                        inline_keyboard: [[
+                            { text: 'Back to Payment Settings', callback_data: `payment_method:${groupId}:payfast` }
+                        ]]
+                    };
+                    return ctx.reply('PayFast configuration canceled.', { reply_markup: keyboard });
+                }
+
+                if (step === 'merchant_id') {
+                    // Update merchant ID and move to next step
+                    await Group.findOneAndUpdate(
+                        { groupId },
+                        { $set: { 'customPaymentSettings.payfast.merchantId': messageText } },
+                        { upsert: true }
+                    );
+
+                    // Update session to next step
+                    ctx.session.configuringPaymentFor.step = 'merchant_key';
+
+                    await ctx.reply(
+                        `PayFast Merchant ID saved.\n\n` +
+                        `Step 2/3: Please enter your PayFast Merchant Key.`
+                    );
+                } else if (step === 'merchant_key') {
+                    // Update merchant key and move to final step
+                    await Group.findOneAndUpdate(
+                        { groupId },
+                        { $set: { 'customPaymentSettings.payfast.merchantKey': messageText } },
+                        { upsert: true }
+                    );
+
+                    // Update session to next step
+                    ctx.session.configuringPaymentFor.step = 'passphrase';
+
+                    await ctx.reply(
+                        `PayFast Merchant Key saved.\n\n` +
+                        `Step 3/3: Please enter your PayFast Passphrase (or type "skip" if you don't have one).`
+                    );
+                } else if (step === 'passphrase') {
+                    // Only save passphrase if not "skip"
+                    if (messageText.toLowerCase() !== 'skip') {
+                        await Group.findOneAndUpdate(
+                            { groupId },
+                            { $set: { 'customPaymentSettings.payfast.passPhrase': messageText } },
+                            { upsert: true }
+                        );
+                    }
+
+                    // Configuration complete
+                    delete ctx.session.configuringPaymentFor;
+
+                    // Send back to registration menu
+                    const keyboard = {
+                        inline_keyboard: [[
+                            { text: 'Continue Registration', callback_data: `register_group:${groupId}` }
+                        ]]
+                    };
+
+                    await ctx.reply(
+                        `✅ PayFast configuration complete!\n\nClick below to continue with the registration:`,
+                        { reply_markup: keyboard }
+                    );
+                }
+                return;
+            }
+        } catch (err) {
+            console.error('Error handling text input:', err);
+            console.error('Error details:', err.stack); // Add stack trace for better debugging
+            await ctx.reply('An error occurred while processing your input. Please try again.');
         }
-
-        const Group = require('../models/group');
-        const chat = await ctx.getChat();
-
-        if (chat.type === 'private') {
-            return ctx.reply('This command can only be used in groups.');
-        }
-
-        let group = await Group.findOne({ groupId: chat.id });
-        if (!group) {
-            group = new Group({ groupId: chat.id });
-        }
-
-        group.welcomeMessage = message;
-        await group.save();
-
-        await ctx.reply('Welcome message has been updated.');
     });
 };
 
