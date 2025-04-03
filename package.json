@@ -5,13 +5,7 @@
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "dev": "nodemon bot.js",
-    "setup-db": "node setup-database.js",
-    "check-db": "node check-db-connection.js",
-    "start:prod": "node bot.min.js",
-    "config-mongo": "node mongo-config.js",
-    "start:with-config": "node mongo-config.js && node bot.js",
-    "dev:with-config": "node mongo-config.js && nodemon bot.js"
+    "dev": "nodemon bot.js"
   },
   "keywords": [
     "telegram",
@@ -22,10 +16,10 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "axios": "^1.8.4",
-    "body-parser": "^1.20.3",
+    "axios": "^1.6.2",
+    "body-parser": "^1.20.2",
     "dotenv": "^16.3.1",
-    "express": "^4.21.2",
+    "express": "^4.18.2",
     "mongoose": "^7.6.3",
     "telegraf": "^4.15.0"
   },

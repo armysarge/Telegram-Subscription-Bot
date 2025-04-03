@@ -37,6 +37,20 @@ const paymentSchema = new mongoose.Schema({
     currency: { type: String, required: true },
     paymentId: { type: String, required: true, unique: true },
     status: { type: String, default: 'pending' },
+    providerName: String,
+    isSubscription: { type: Boolean, default: false },
+    subscriptionId: String,
+    createdAt: { type: Date, default: Date.now }
+});
+
+// Group Schema
+const groupSchema = new mongoose.Schema({
+    groupId: { type: Number, required: true, unique: true },
+    groupTitle: String,
+    subscriptionRequired: { type: Boolean, default: true },
+    adminUsers: [{ type: Number }],
+    welcomeMessage: String,
+    subscriptionPrice: Number,
     createdAt: { type: Date, default: Date.now }
 });
 
@@ -50,6 +64,7 @@ const notificationLogSchema = new mongoose.Schema({
 // Create models
 const User = mongoose.model('User', userSchema);
 const Payment = mongoose.model('Payment', paymentSchema);
+const Group = mongoose.model('Group', groupSchema);
 const NotificationLog = mongoose.model('NotificationLog', notificationLogSchema);
 
 // Create indexes for better performance
@@ -59,6 +74,7 @@ async function createIndexes() {
         await User.collection.createIndex({ userId: 1 }, { unique: true });
         await Payment.collection.createIndex({ userId: 1 });
         await Payment.collection.createIndex({ paymentId: 1 }, { unique: true });
+        await Group.collection.createIndex({ groupId: 1 }, { unique: true });
         await NotificationLog.collection.createIndex({ userId: 1, groupId: 1 });
         await NotificationLog.collection.createIndex({ createdAt: 1 }, { expireAfterSeconds: 86400 }); // Auto-delete after 24 hours
         console.log('Indexes created successfully');
@@ -72,8 +88,6 @@ async function initializeDatabase() {
     try {
         await createIndexes();
         console.log('Database setup completed successfully');
-
-        // Exit the process when done
         mongoose.connection.close();
         process.exit(0);
     } catch (error) {

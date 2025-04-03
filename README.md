@@ -1,27 +1,27 @@
 # Telegram Subscription Bot
 
-A Telegram bot that handles payments and subscription management for groups and channels. This bot allows group and channel admins to monetize their content by limiting visibility of messages to paid subscribers only.
+A Telegram bot that handles payments and subscription management for groups. This bot allows group admins to monetize their content by limiting visibility of messages to paid subscribers only.
 
 ## Features
 
-- Payment processing through PayFast integration
+- Payment processing through modular payment provider system
+- PayFast integration with support for easily adding additional payment providers
 - One-time and recurring subscription options
-- Subscription management for both groups and channels
+- Subscription management for groups
 - Automatic message filtering for non-subscribers
 - Subscription status tracking and expiration management
 - Notification system for users when their messages are hidden
 - Admin dashboard with subscription statistics
 - Customizable subscription pricing and plans
-- Direct channel management with `/manage_this_channel` command
 - Customizable welcome messages
-- Support for multiple payment providers (through modular design)
+- Extensible architecture for adding new payment methods
 
 ## Prerequisites
 
 - Node.js (v12 or higher)
 - MongoDB
 - A Telegram Bot Token from [@BotFather](https://t.me/BotFather)
-- PayFast merchant account and API credentials
+- PayFast merchant account and API credentials (or other supported payment providers)
 
 ## Quick Installation
 
@@ -133,14 +133,14 @@ sudo systemctl start mongod
    ```
    BOT_TOKEN=your_telegram_bot_token
    MONGODB_URI=mongodb://localhost:27017/telegram-subscription-bot
-   PAYFAST_MERCHANT_ID=your_payfast_merchant_id
-   PAYFAST_MERCHANT_KEY=your_payfast_merchant_key
-   PAYFAST_PASSPHRASE=your_payfast_passphrase
+
+   # PayFast Settings
    PAYFAST_SANDBOX=true
    PAYFAST_RETURN_URL=https://t.me/your_bot_username
    PAYFAST_CANCEL_URL=https://t.me/your_bot_username
    PAYFAST_NOTIFY_URL=https://your-server.com/payfast-itn
    ```
+   Note: Make sure to replace the placeholder PAYFAST_NOTIFY_URL with your actual server URL before going to production. You do NOT need to add the merchant details, as these will be configured per group during registration.
 
 4. Set up your bot with BotFather:
    - Create a new bot with `/newbot`
@@ -183,6 +183,55 @@ If you prefer a cloud-based MongoDB solution:
    MONGODB_URI=mongodb+srv://<username>:<password>@cluster0.example.mongodb.net/telegram-subscription-bot?retryWrites=true&w=majority
    ```
 
+## Payment Provider System
+
+The bot now uses a modular payment provider system that makes it easy to add support for additional payment methods:
+
+### Supported Payment Providers
+- **PayFast**: Enabled by default for South African payments
+
+### Adding New Payment Providers
+
+To add a new payment provider:
+
+1. Create a new provider class in the `payment-providers` directory
+2. Extend the base `PaymentProvider` class and implement all required methods
+3. Add your new provider to the `index.js` exports
+4. Register the provider in `bot.js`
+
+Example of adding a new payment provider in `bot.js`:
+
+```javascript
+// Import the new provider
+const { PaymentManager, PayFastProvider, NewProvider } = require('./payment-providers');
+
+// Initialize payment providers
+const paymentManager = new PaymentManager();
+
+// Configure and register PayFast (default)
+const payfastProvider = new PayFastProvider(payfastConfig);
+paymentManager.registerProvider('payfast', payfastProvider, true);
+
+// Configure and register a new provider
+const newProviderConfig = {
+    // Provider-specific configuration
+};
+const newProvider = new NewProvider(newProviderConfig);
+paymentManager.registerProvider('new-provider', newProvider);
+```
+
+### Payment Provider Interface
+
+All payment providers must implement these core methods:
+
+- `generatePaymentUrl()`: Create a payment URL for one-time payments
+- `generateSubscriptionUrl()`: Create a URL for subscription payments
+- `validatePayment()`: Validate payment notifications from the provider
+- `processPaymentData()`: Extract user and payment details from notifications
+- `setupWebhook()`: Set up the webhook route for the payment provider
+
+See the `PaymentProvider.js` file for the complete interface definition.
+
 ## Bot Commands
 
 ### User Commands
@@ -195,72 +244,29 @@ If you prefer a cloud-based MongoDB solution:
 - `/admin` - Access admin dashboard
 - `/admin_toggle` - Toggle subscription requirement on/off
 - `/admin_welcome [message]` - Set custom welcome message
-- `/admin_stats` - View subscription statistics for your group/channel
+- `/admin_stats` - View subscription statistics for your group
 - `/admin_subscription` - Configure subscription settings
 - `/admin_payment` - Configure payment options
-- `/manage_this_channel` - Directly manage channel settings (in channels)
-- `/manage_channel` - Manage your channels (in private chat with bot)
 - `/add_admin @username` - Add another admin to the bot's database
 
 ## Setting Up in a Group
 
 1. Add the bot to your group as an administrator
 2. Give it permission to delete messages
-3. Use `/admin` to configure the bot settings
+3. Use `/admin` or `/manage_this_group` to configure the bot settings
 4. Inform your group members to subscribe using the `/subscribe` command
-
-## Setting Up in a Channel
-
-1. Add the bot to your channel as an administrator
-2. Use `/manage_this_channel` in the channel to access management options
-3. Configure subscription settings, pricing, and welcome messages
-4. When members type `/subscribe` in the channel, they'll be prompted to start a private chat with the bot to complete their subscription
-
-## Channel Subscription Management
-
-The new `/manage_this_channel` command provides an interactive way to manage channel subscriptions:
-
-1. **Direct Channel Management**: Send the command in your channel, and the bot will provide a management panel
-2. **Subscription Settings**: Toggle subscription requirements on/off, set pricing for one-time and recurring subscriptions
-3. **Welcome Messages**: Create custom messages for new subscribers
-4. **Statistics**: View detailed information about subscribers and conversion rates
-5. **Admin Management**: Add other channel administrators to help manage subscriptions
-
-When a user types `/subscribe` in your channel, the bot will now respond with instructions and a direct link to start the subscription process.
-
-## PayFast Integration
-
-This bot uses PayFast for payment processing. To set up PayFast:
-
-1. Create a PayFast merchant account at [PayFast.co.za](https://www.payfast.co.za/)
-2. Get your merchant ID, merchant key, and set a passphrase in your PayFast dashboard
-3. Configure your return and cancel URLs to point to your bot
-4. For testing, use the sandbox mode (`PAYFAST_SANDBOX=true`)
-5. For production, set up a web server to handle IPNs (Instant Payment Notifications)
-
-## Database Management
-
-To backup your MongoDB database:
-```
-mongodump --db telegram-subscription-bot --out ./backup
-```
-
-To restore from backup:
-```
-mongorestore --db telegram-subscription-bot ./backup/telegram-subscription-bot
-```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Subscription commands not working in channels**: Make sure the bot has been added as an administrator to the channel.
+1. **Messages not being filtered**: Check that the bot has delete message permissions in groups.
 
-2. **Messages not being filtered**: Check that the bot has delete message permissions in groups.
+2. **Payment not completing**: Verify your payment provider credentials and ensure the sandbox mode is set correctly.
 
-3. **Payment not completing**: Verify your PayFast API credentials and ensure the sandbox mode is set correctly.
+3. **Database connection failures**: Check your MongoDB connection string and ensure the database is running.
 
-4. **Database connection failures**: Check your MongoDB connection string and ensure the database is running.
+4. **Adding new payment providers**: If you encounter issues when adding a new payment provider, check that you've properly extended the base PaymentProvider class and implemented all required methods.
 
 ## Contributing
 
