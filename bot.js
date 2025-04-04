@@ -14,8 +14,9 @@ const messageHandlers = require('./controllers/messages');
 const callbackHandlers = require('./controllers/callbacks');
 const subscriptionUtils = require('./utils/subscriptionUtils');
 
-// Import payment provider system
+// Import payment provider system and gateway configuration
 const { PaymentManager, PayFastProvider } = require('./payment-providers');
+const paymentGatewaysConfig = require('./config/paymentGateways');
 
 // Load environment variables
 dotenv.config();
@@ -41,7 +42,11 @@ const payfastConfig = {
     testMode: process.env.NODE_ENV !== 'production'
 };
 
-// Add PayFast payment provider
+// Add payment providers from configuration
+const enabledGateways = paymentGatewaysConfig.availableGateways.filter(gateway => gateway.enabled);
+console.log(`Loading ${enabledGateways.length} enabled payment gateways from config`);
+
+// Currently register PayFast manually but in the future can be expanded to load dynamically
 paymentManager.registerProvider('payfast', new PayFastProvider(payfastConfig), true);
 
 // Connect to MongoDB

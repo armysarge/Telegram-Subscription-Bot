@@ -88,10 +88,15 @@ const register = (bot, paymentManager) => {
 
         const message = '🤖 *Welcome to the Subscription Bot!*\n\n'
             + 'MonitizeRobot bot helps manage subscriptions for groups.\n\n'
-            + '*Available commands:*\n'
+            + '*Available commands:*\n';
+
+        if (!isAdmin || isPrivate) {
+            message += '*User Commands:*\n'
             + '💳 /subscribe - Start subscription process\n'
-            + '📊 /status - Check your subscription status\n'
-            + '❓ /help - Show this help message\n';
+            + '📊 /status - Check your subscription status\n';
+        }
+
+        message += '❓ /help - Show this help message\n';
 
         // Commands that only make sense in private chat
         if (isPrivate) {
@@ -130,10 +135,11 @@ const register = (bot, paymentManager) => {
 
         let message = '📚 *Available Commands*\n\n';
 
-        // Common user commands for both private and group chats
-        message += '*User Commands:*\n';
-        message += '💳 /subscribe - Start your subscription process\n';
-        message += '📊 /status - Check your subscription status\n';
+        if (!isAdmin || isPrivate) {
+            message += '*User Commands:*\n';
+            message += '💳 /subscribe - Start your subscription process\n';
+            message += '📊 /status - Check your subscription status\n';
+        }
 
         // Commands that only make sense in private chat
         if (isPrivate) {

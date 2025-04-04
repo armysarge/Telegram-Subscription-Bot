@@ -39,9 +39,11 @@ MonitizeRobot is a powerful, feature-rich Telegram bot designed to help group ad
    ```
    BOT_TOKEN=your_telegram_bot_token
    MONGODB_URI=your_mongodb_connection_string
+
+   # Payment Gateway Configuration
    PAYFAST_MERCHANT_ID=your_payfast_merchant_id
    PAYFAST_MERCHANT_KEY=your_payfast_merchant_key
-   PAYFAST_PASSPHRASE=your_payfast_passphrase (optional)
+   PAYFAST_PASSPHRASE=your_payfast_passphrase
    PAYFAST_NOTIFY_URL=your_webhook_url
    ```
 
@@ -121,6 +123,126 @@ To configure user trials:
 4. Toggle the setting on/off and set your preferred trial duration
 
 This feature helps increase conversion rates by letting users experience the value of your group before committing to a paid subscription.
+
+## 📊 Analytics
+
+The bot provides detailed analytics on:
+- Total subscribers
+- Revenue generated
+- Active subscriptions
+- Payment history
+- Group activity metrics
+- User engagement statistics
+
+## 💲 Payment Gateway System
+
+The bot features a robust plugin-based payment gateway architecture that makes it easy to add new payment processors:
+
+### Supported Payment Gateways
+- **PayFast**: Complete integration with South African payment processor
+
+### Payment Gateway Configuration
+
+Payment gateways are configured through a centralized configuration system:
+
+1. **Configuration File**: Payment gateways are defined in `config/paymentGateways.js`
+2. **Easy Management**: Enable/disable gateways without code changes
+3. **Structured Configuration**: Each gateway has its own configuration schema
+4. **Display Name Mapping**: Consistent naming across the application
+
+Example configuration:
+```javascript
+module.exports = {
+    availableGateways: [
+        {
+            id: 'payfast',
+            name: '💳 PayFast',
+            enabled: true,
+            configSteps: ['merchantId', 'merchantKey', 'passphrase']
+        },
+        // Additional payment gateways can be added here
+    ],
+    providerDisplayNames: {
+        'payfast': '💳 PayFast',
+        // More display names...
+    }
+};
+```
+
+### Adding New Payment Gateways
+
+The system is designed with a modular approach that makes adding new payment gateways straightforward:
+
+1. **Define the Gateway**: Add the new gateway to `config/paymentGateways.js`
+2. **Implement Provider**: Create a new provider class in the `payment-providers` directory
+3. **Register Provider**: Add the provider to the `bot.js` initialization
+
+#### Steps to Add a New Payment Gateway:
+
+1. Add the gateway to the configuration file:
+   ```javascript
+   // In config/paymentGateways.js
+   module.exports = {
+     availableGateways: [
+       // ...existing gateways
+       {
+         id: 'newgateway',
+         name: '💳 New Gateway',
+         enabled: true,
+         configSteps: ['apiKey', 'secretKey']
+       }
+     ],
+     providerDisplayNames: {
+       // ...existing display names
+       'newgateway': '💳 New Gateway'
+     }
+   };
+   ```
+
+2. Create a new provider class:
+   ```javascript
+   // In payment-providers/NewGatewayProvider.js
+   class NewGatewayProvider {
+     constructor(config) {
+       this.config = config;
+     }
+
+     generatePaymentUrl(paymentData) {
+       // Implementation
+     }
+
+     validatePayment(requestData) {
+       // Implementation
+     }
+
+     // ...other required methods
+   }
+
+   module.exports = NewGatewayProvider;
+   ```
+
+3. Register the provider in `bot.js`:
+   ```javascript
+   const { NewGatewayProvider } = require('./payment-providers/NewGatewayProvider');
+
+   // Configure provider
+   const newGatewayConfig = {
+     apiKey: process.env.NEW_GATEWAY_API_KEY,
+     secretKey: process.env.NEW_GATEWAY_SECRET_KEY
+   };
+
+   // Register provider
+   paymentManager.registerProvider('newgateway', new NewGatewayProvider(newGatewayConfig), true);
+   ```
+
+### Payment Process Flow
+
+1. Admin configures a payment gateway for their group
+2. User selects payment method when subscribing
+3. Bot generates a payment URL using the selected gateway
+4. User completes payment on the provider's site
+5. Provider sends webhook notification back to the bot
+6. Bot validates the payment and activates the subscription
 
 ## 💾 Database Structure
 

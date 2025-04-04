@@ -370,12 +370,59 @@ const register = (bot) => {
                 return ctx.answerCbQuery('Group not found in database');
             }
 
+            // Get available payment gateways from config file
+            const paymentGatewaysConfig = require('../config/paymentGateways');
+            let availableGateways = [];
+
+            try {
+                // First try to get gateways from PaymentManager if it exists
+                const { PaymentManager } = require('../payment-providers');
+                const paymentManager = new PaymentManager();
+
+                const providers = Object.keys(paymentManager.providers || {});
+                if (providers && providers.length > 0) {
+                    // Use provider display names from config if available
+                    availableGateways = providers.map(id => ({
+                        id,
+                        name: paymentGatewaysConfig.providerDisplayNames[id] ||
+                              `💳 ${id.charAt(0).toUpperCase() + id.slice(1)}`
+                    }));
+                }
+            } catch (error) {
+                console.error('Error loading payment providers from PaymentManager:', error);
+                // Continue with config file approach
+            }
+
+            // If no gateways found from PaymentManager or error occurred, use config file
+            if (availableGateways.length === 0) {
+                // Filter only enabled gateways from the config
+                availableGateways = paymentGatewaysConfig.availableGateways
+                    .filter(gateway => gateway.enabled)
+                    .map(gateway => ({
+                        id: gateway.id,
+                        name: gateway.name
+                    }));
+            }
+
+            // If still no gateways found, show an error message
+            if (availableGateways.length === 0) {
+                return ctx.answerCbQuery('No payment gateways are currently available');
+            }
+
+            // Build keyboard dynamically based on available gateways
+            const gatewayButtons = availableGateways.map(gateway => ([{
+                text: gateway.name,
+                callback_data: `payment_method:${groupId}:${gateway.id}`
+            }]));
+
+            // Add back button
+            gatewayButtons.push([{
+                text: '◀️ Back to Registration',
+                callback_data: `register_group:${groupId}`
+            }]);
+
             const keyboard = {
-                inline_keyboard: [
-                    [{ text: '💳 PayFast', callback_data: `payment_method:${groupId}:payfast` }],
-                    // Add other payment methods here in the future
-                    [{ text: '◀️ Back to Registration', callback_data: `register_group:${groupId}` }]
-                ]
+                inline_keyboard: gatewayButtons
             };
 
             await ctx.editMessageText(
@@ -714,7 +761,7 @@ const register = (bot) => {
                     delete ctx.session.configuringPaymentFor;
                     const keyboard = {
                         inline_keyboard: [[
-                            { text: 'Back to Payment Settings', callback_data: `payment_method:${groupId}:payfast` }
+                            { text: 'Back to Payment Settings', callback_data: `group_payment:${groupId}` }
                         ]]
                     };
                     return ctx.reply('PayFast configuration canceled.', { reply_markup: keyboard });
@@ -733,7 +780,8 @@ const register = (bot) => {
 
                     await ctx.reply(
                         `PayFast Merchant ID saved.\n\n` +
-                        `Step 2/3: Please enter your PayFast Merchant Key.`
+                        `Step 2/3: Please enter your PayFast Merchant Key.\n\n` +
+                        `Type /cancel at any time to cancel this configuration.`
                     );
                 } else if (step === 'merchant_key') {
                     // Update merchant key and move to final step
@@ -748,7 +796,8 @@ const register = (bot) => {
 
                     await ctx.reply(
                         `PayFast Merchant Key saved.\n\n` +
-                        `Step 3/3: Please enter your PayFast Passphrase (or type "skip" if you don't have one).`
+                        `Step 3/3: Please enter your PayFast Passphrase (or type "skip" if you don't have one).\n\n` +
+                        `Type /cancel at any time to cancel this configuration.`
                     );
                 } else if (step === 'passphrase') {
                     // Only save passphrase if not "skip"
