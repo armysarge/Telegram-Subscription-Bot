@@ -1,372 +1,18 @@
 const User = require('../models/user');
 const Group = require('../models/group');
-const { message } = require('telegraf/filters'); // Add this import for message filters
+const { verifyAdmin } = require('./adminCommands');
+const userCommands = require('./userCommands');
+const adminCommands = require('./adminCommands');
 
 // Command handlers
 const register = (bot, paymentManager) => {
-    // Start command
-    bot.command('start', async (ctx) => {
-        // Check if there's a deep link parameter (e.g., subscribe_group_123456)
-        const startParam = ctx.startPayload;
+    // Register user commands
+    userCommands.register(bot, paymentManager);
 
-        if (startParam && startParam.startsWith('subscribe_group_')) {
-            // Extract group ID from the parameter
-            const groupId = parseInt(startParam.replace('subscribe_group_', ''));
-            if (groupId) {
-                // Redirect to group-specific subscription flow
-                return handleGroupSubscription(ctx, groupId);
-            }
-        }
+    // Register admin commands
+    adminCommands.register(bot, paymentManager);
 
-        const message = 'Welcome to the Subscription Bot!\n\n'
-            + 'This bot helps manage subscriptions for groups.\n\n'
-            + 'Available commands:\n'
-            + '/subscribe - Start subscription process\n'
-            + '/status - Check your subscription status\n'
-            + '/help - Show this help message';
-        await ctx.reply(message);
-    });
-
-    // Helper function to handle group subscription
-    async function handleGroupSubscription(ctx, groupId) {
-        try {
-            // Get group details
-            const group = await Group.findOne({ groupId });
-            if (!group) {
-                return ctx.reply('Group not found or subscription is not required for this group.');
-            }
-
-            // Make sure the group is registered and has subscription enabled
-            if (!group.isRegistered || !group.subscriptionRequired) {
-                return ctx.reply('This group does not require subscription or has not been registered yet.');
-            }
-
-            // Check if user is already subscribed to this group
-            const user = await User.findOne({
-                userId: ctx.from.id,
-                'groupSubscriptions.groupId': groupId,
-                'groupSubscriptions.isSubscribed': true,
-                'groupSubscriptions.subscriptionExpiresAt': { $gt: new Date() }
-            });
-
-            if (user) {
-                // Find the specific group subscription
-                const groupSub = user.groupSubscriptions.find(sub =>
-                    sub.groupId === groupId && sub.isSubscribed);
-
-                return ctx.reply(
-                    `You are already subscribed to ${group.groupTitle}.\n` +
-                    `Your subscription is active until: ${groupSub.subscriptionExpiresAt.toLocaleDateString()}`
-                );
-            }
-
-            // Create subscription options based on group settings
-            const keyboard = {
-                inline_keyboard: [
-                    [{
-                        text: `Subscribe to ${group.groupTitle} (${group.subscriptionPrice} ${group.subscriptionCurrency})`,
-                        callback_data: `subscribe_to_group:${groupId}`
-                    }],
-                    [{ text: 'Cancel', callback_data: 'subscribe_cancel' }]
-                ]
-            };
-
-            await ctx.reply(
-                `Subscribe to ${group.groupTitle}\n\n` +
-                `Monthly subscription fee: ${group.subscriptionPrice} ${group.subscriptionCurrency}\n\n` +
-                `Click below to continue:`,
-                { reply_markup: keyboard }
-            );
-        } catch (err) {
-            console.error('Error in handleGroupSubscription:', err);
-            await ctx.reply('An error occurred while processing your subscription. Please try again later.');
-        }
-    }
-
-    // Help command
-    bot.command('help', async (ctx) => {
-        const message = 'Available commands:\n\n'
-            + 'User Commands:\n'
-            + '/subscribe - Start subscription process\n'
-            + '/status - Check subscription status\n'
-            + '/my_groups - Manage your groups\n\n'
-            + 'Admin Commands:\n'
-            + '/admin - Access admin dashboard\n'
-            + '/admin_toggle - Toggle subscription requirement\n'
-            + '/admin_welcome - Set welcome message\n'
-            + '/admin_stats - View subscription statistics\n'
-            + '/admin_subscription - Configure subscription settings\n'
-            + '/admin_payment - Configure payment options';
-        await ctx.reply(message);
-    });
-
-    // My Groups command - allows admins to manage their groups from private chat
-    bot.command('my_groups', async (ctx) => {
-        // Only works in private chat
-        if (ctx.chat.type !== 'private') {
-            return ctx.reply('Please use this command in a private chat with me to manage your groups.');
-        }
-
-        const userId = ctx.from.id;
-
-        try {
-            // Find all groups where the user is an admin
-            const adminGroups = await Group.find({ adminUsers: userId });
-
-            if (!adminGroups || adminGroups.length === 0) {
-                return ctx.reply('You don\'t have admin rights for any groups in my database. Add me to a group as an admin to get started.');
-            }
-
-            // Create keyboard with admin groups
-            const keyboard = {
-                inline_keyboard: adminGroups.map(group => ([{
-                    text: `${group.groupTitle} ${group.isRegistered ? '✅' : '❌'}`,
-                    callback_data: `manage_group:${group.groupId}`
-                }]))
-            };
-
-            await ctx.reply(
-                '*Your Groups*\n\n' +
-                'Select a group to manage:\n' +
-                '(✅ = registered, ❌ = not registered)',
-                {
-                    parse_mode: 'Markdown',
-                    reply_markup: keyboard
-                }
-            );
-        } catch (err) {
-            console.error('Error getting admin groups:', err);
-            await ctx.reply('An error occurred while fetching your groups. Please try again later.');
-        }
-    });
-
-    // Subscribe command
-    bot.command('subscribe', async (ctx) => {
-        const User = require('../models/user');
-        const Group = require('../models/group');
-        const chat = await ctx.getChat();
-
-        if (chat.type === 'private') {
-            // Check if the user has joined any groups that require subscription
-            const user = await User.findOne({ userId: ctx.from.id });
-            const joinedGroups = user?.joinedGroups || [];
-
-            // Get all groups the user has joined that require subscription
-            const availableGroups = await Group.find({
-                groupId: { $in: joinedGroups.map(g => g.groupId) },
-                isRegistered: true,
-                subscriptionRequired: true
-            });
-
-            if (availableGroups.length === 0) {
-                return ctx.reply('You haven\'t joined any groups that require subscription yet.');
-            }
-
-            // Create buttons for each group
-            const keyboard = {
-                inline_keyboard: availableGroups.map(group => ([{
-                    text: `${group.groupTitle} (${group.subscriptionPrice} ${group.subscriptionCurrency})`,
-                    callback_data: `subscribe_to_group:${group.groupId}`
-                }]))
-            };
-
-            return ctx.reply(
-                'Select a group to subscribe to:',
-                { reply_markup: keyboard }
-            );
-        }
-
-        // In groups, check if subscription is required
-        const group = await Group.findOne({ groupId: chat.id });
-        if (!group?.subscriptionRequired) {
-            return ctx.reply('Subscriptions are not required in this group.');
-        }
-
-        if (!group.isRegistered) {
-            return ctx.reply('This group has not been registered for subscription services yet.');
-        }
-
-        // Check if user is already subscribed to this group
-        const user = await User.findOne({
-            userId: ctx.from.id,
-            'groupSubscriptions.groupId': chat.id,
-            'groupSubscriptions.isSubscribed': true,
-            'groupSubscriptions.subscriptionExpiresAt': { $gt: new Date() }
-        });
-
-        if (user) {
-            // Find the specific group subscription
-            const groupSub = user.groupSubscriptions.find(sub =>
-                sub.groupId === chat.id && sub.isSubscribed);
-
-            return ctx.reply(
-                `You are already subscribed to this group.\n` +
-                `Your subscription is active until: ${groupSub.subscriptionExpiresAt.toLocaleDateString()}`
-            );
-        }
-
-        // Direct them to private chat with deep link
-        const keyboard = {
-            inline_keyboard: [[{
-                text: 'Subscribe in Private Chat',
-                url: `https://t.me/${ctx.me.username}?start=subscribe_group_${chat.id}`
-            }]]
-        };
-        await ctx.reply('Please click below to subscribe in a private chat:', { reply_markup: keyboard });
-    });
-
-    // Status command
-    bot.command('status', async (ctx) => {
-        const User = require('../models/user');
-        const user = await User.findOne({ userId: ctx.from.id });
-
-        if (!user) {
-            return ctx.reply('You have no subscription history.');
-        }
-
-        const chat = await ctx.getChat();
-
-        // If in a group, show status for that specific group
-        if (chat.type === 'group' || chat.type === 'supergroup') {
-            const groupSub = user.groupSubscriptions?.find(sub => sub.groupId === chat.id);
-
-            if (!groupSub || !groupSub.isSubscribed) {
-                return ctx.reply('You are not currently subscribed to this group.');
-            }
-
-            return ctx.reply(
-                `Your subscription to this group is active until: ${groupSub.subscriptionExpiresAt.toLocaleDateString()}`
-            );
-        }
-
-        // If in private chat, show all group subscriptions
-        if (!user.groupSubscriptions || user.groupSubscriptions.length === 0) {
-            return ctx.reply('You are not currently subscribed to any groups.');
-        }
-
-        const activeSubscriptions = user.groupSubscriptions.filter(
-            sub => sub.isSubscribed && sub.subscriptionExpiresAt > new Date()
-        );
-
-        if (activeSubscriptions.length === 0) {
-            return ctx.reply('You have no active group subscriptions.');
-        }
-
-        let message = 'Your active subscriptions:\n\n';
-        activeSubscriptions.forEach(sub => {
-            message += `• ${sub.groupTitle}\n`;
-            message += `  Expires: ${sub.subscriptionExpiresAt.toLocaleDateString()}\n`;
-            message += `  Amount: ${sub.paymentAmount} ${sub.paymentCurrency}\n\n`;
-        });
-
-        await ctx.reply(message);
-    });
-
-    // Admin toggle command
-    bot.command('admin_toggle', async (ctx) => {
-        try {
-            const chat = await ctx.getChat();
-
-            if (chat.type === 'private') {
-                return ctx.reply('This command can only be used in groups.');
-            }
-
-            // Directly check admin status instead of using ctx.state.isAdmin
-            const userId = ctx.from.id;
-            const chatId = chat.id;
-
-            let isAdmin = false;
-            try {
-                const admins = await ctx.telegram.getChatAdministrators(chatId);
-                isAdmin = admins.some(admin => admin.user.id === userId);
-            } catch (err) {
-                console.error('Error checking admin status:', err);
-                return ctx.reply('An error occurred while checking your administrator status.');
-            }
-
-            if (!isAdmin) {
-                return ctx.reply('Sorry, this command is only available to administrators.');
-            }
-
-            let group = await Group.findOne({ groupId: chatId });
-            if (!group) {
-                group = new Group({
-                    groupId: chatId,
-                    groupTitle: chat.title,
-                    adminUsers: [userId]  // Add the admin to the group's admin list
-                });
-            } else if (!group.adminUsers.includes(userId)) {
-                // Make sure the admin is in the group's admin list
-                group.adminUsers.push(userId);
-            }
-
-            // Check if the group is registered
-            if (!group.isRegistered && !group.subscriptionRequired) {
-                return ctx.reply('This group is not registered. Please register the group before enabling subscriptions.');
-            }
-
-            group.subscriptionRequired = !group.subscriptionRequired;
-            await group.save();
-
-            await ctx.reply(`Subscription requirement has been ${group.subscriptionRequired ? 'enabled' : 'disabled'} for this group.`);
-        } catch (err) {
-            console.error('Error in admin_toggle command:', err);
-            ctx.reply('An error occurred while processing the command.');
-        }
-    });
-
-    // Admin welcome command - update with the same admin check pattern
-    bot.command('admin_welcome', async (ctx) => {
-        try {
-            const chat = await ctx.getChat();
-
-            if (chat.type === 'private') {
-                return ctx.reply('This command can only be used in groups.');
-            }
-
-            // Directly check admin status
-            const userId = ctx.from.id;
-            const chatId = chat.id;
-
-            let isAdmin = false;
-            try {
-                const admins = await ctx.telegram.getChatAdministrators(chatId);
-                isAdmin = admins.some(admin => admin.user.id === userId);
-            } catch (err) {
-                console.error('Error checking admin status:', err);
-                return ctx.reply('An error occurred while checking your administrator status.');
-            }
-
-            if (!isAdmin) {
-                return ctx.reply('Sorry, this command is only available to administrators.');
-            }
-
-            const messageText = ctx.message.text.split('/admin_welcome ')[1];
-            if (!messageText) {
-                return ctx.reply('Please provide a welcome message. Example:\n/admin_welcome Welcome to our group!');
-            }
-
-            let group = await Group.findOne({ groupId: chatId });
-            if (!group) {
-                group = new Group({
-                    groupId: chatId,
-                    groupTitle: chat.title,
-                    adminUsers: [userId]
-                });
-            } else if (!group.adminUsers.includes(userId)) {
-                group.adminUsers.push(userId);
-            }
-
-            group.welcomeMessage = messageText;
-            await group.save();
-
-            await ctx.reply('Welcome message has been updated.');
-        } catch (err) {
-            console.error('Error in admin_welcome command:', err);
-            ctx.reply('An error occurred while processing the command.');
-        }
-    });
-
+    // Handle text inputs for interactive flows
     bot.on('text', async (ctx) => {
         // Add comprehensive debugging at the start
         console.log('Text handler triggered');
@@ -374,7 +20,8 @@ const register = (bot, paymentManager) => {
         console.log('Message text:', ctx.message.text);
 
         // Skip if not expecting any input
-        if (!ctx.session?.awaitingWelcomeFor && !ctx.session?.awaitingPriceFor && !ctx.session?.configuringPaymentFor) {
+        if (!ctx.session?.awaitingWelcomeFor && !ctx.session?.awaitingPriceFor &&
+            !ctx.session?.configuringPaymentFor && !ctx.session?.awaitingTrialDaysFor) {
             console.log('No pending input expected, skipping handler');
             return;
         }
@@ -386,14 +33,21 @@ const register = (bot, paymentManager) => {
             if (ctx.session?.awaitingPriceFor) {
                 console.log('Processing price input for group:', ctx.session.awaitingPriceFor);
                 const groupId = ctx.session.awaitingPriceFor;
+                const fromSubscriptionSettings = ctx.session.fromSubscriptionSettings || false;
 
                 // Handle cancel command
                 if (messageText.toLowerCase() === '/cancel') {
                     console.log('Price update canceled');
                     delete ctx.session.awaitingPriceFor;
+                    delete ctx.session.fromSubscriptionSettings;
+
+                    // Show different back button based on context
                     const keyboard = {
                         inline_keyboard: [[
-                            { text: 'Back to Registration', callback_data: `register_group:${groupId}` }
+                            {
+                                text: fromSubscriptionSettings ? '◀️ Back to Subscription Settings' : '◀️ Back to Registration',
+                                callback_data: fromSubscriptionSettings ? `admin_subscription:${groupId}` : `register_group:${groupId}`
+                            }
                         ]]
                     };
                     return ctx.reply('Price update canceled.', { reply_markup: keyboard });
@@ -422,11 +76,18 @@ const register = (bot, paymentManager) => {
                     console.log('Group updated, clearing session state');
                     delete ctx.session.awaitingPriceFor;
 
+                    // Show different back button based on context
                     const keyboard = {
                         inline_keyboard: [[
-                            { text: 'Back to Registration', callback_data: `register_group:${groupId}` }
+                            {
+                                text: fromSubscriptionSettings ? '◀️ Back to Subscription Settings' : '◀️ Back to Registration',
+                                callback_data: fromSubscriptionSettings ? `admin_subscription:${groupId}` : `register_group:${groupId}`
+                            }
                         ]]
                     };
+
+                    // Also clear the context flag
+                    delete ctx.session.fromSubscriptionSettings;
 
                     await ctx.reply(
                         `✅ Subscription price set to ${price} ZAR successfully!`,
@@ -453,7 +114,7 @@ const register = (bot, paymentManager) => {
                     if (fromManagementMenu) {
                         const keyboard = {
                             inline_keyboard: [[
-                                { text: 'Back to Group Management', callback_data: `manage_group:${groupId}` }
+                                { text: '◀️ Back to Group Management', callback_data: `manage_group:${groupId}` }
                             ]]
                         };
                         return ctx.reply('Welcome message update canceled.', { reply_markup: keyboard });
@@ -473,13 +134,13 @@ const register = (bot, paymentManager) => {
                     if (fromManagementMenu) {
                         const keyboard = {
                             inline_keyboard: [[
-                                { text: 'Back to Group Management', callback_data: `manage_group:${groupId}` }
+                                { text: '◀️ Back to Group Management', callback_data: `manage_group:${groupId}` }
                             ]]
                         };
-                        return ctx.reply('Welcome message updated successfully!', { reply_markup: keyboard });
+                        return ctx.reply('✅ Welcome message updated successfully!', { reply_markup: keyboard });
                     }
 
-                    await ctx.reply('Welcome message updated successfully!');
+                    await ctx.reply('✅ Welcome message updated successfully!');
                 } catch (err) {
                     console.error('Error saving welcome message:', err);
                     await ctx.reply('Failed to update welcome message. Please try again.');
@@ -548,7 +209,7 @@ const register = (bot, paymentManager) => {
                     // Send back to registration menu
                     const keyboard = {
                         inline_keyboard: [[
-                            { text: 'Continue Registration', callback_data: `register_group:${groupId}` }
+                            { text: '▶️ Continue Registration', callback_data: `register_group:${groupId}` }
                         ]]
                     };
 
@@ -556,6 +217,65 @@ const register = (bot, paymentManager) => {
                         `✅ PayFast configuration complete!\n\nClick below to continue with the registration:`,
                         { reply_markup: keyboard }
                     );
+                }
+                return;
+            }
+
+            // Handle trial duration input
+            if (ctx.session?.awaitingTrialDaysFor) {
+                const groupId = ctx.session.awaitingTrialDaysFor;
+
+                // Handle cancel command
+                if (messageText.toLowerCase() === '/cancel') {
+                    delete ctx.session.awaitingTrialDaysFor;
+
+                    const keyboard = {
+                        inline_keyboard: [[
+                            { text: '◀️ Back to Trial Settings', callback_data: `set_user_trial:${groupId}` }
+                        ]]
+                    };
+
+                    return ctx.reply('Trial duration update canceled.', { reply_markup: keyboard });
+                }
+
+                // Validate trial duration
+                const trialDays = parseInt(messageText);
+                console.log('Parsed trial days:', trialDays, 'from input:', messageText);
+
+                if (isNaN(trialDays) || trialDays < 1 || trialDays > 30) {
+                    console.log('Invalid trial duration entered');
+                    return ctx.reply('Please enter a valid number of days (1-30).');
+                }
+
+                try {
+                    console.log('Updating group with trial duration:', trialDays);
+
+                    // Update group with new trial duration and enable trial
+                    await Group.findOneAndUpdate(
+                        { groupId },
+                        {
+                            userTrialDays: trialDays,
+                            userTrialEnabled: true
+                        }
+                    );
+
+                    console.log('Group updated, clearing session state');
+                    delete ctx.session.awaitingTrialDaysFor;
+
+                    const keyboard = {
+                        inline_keyboard: [[
+                            { text: '◀️ Back to Trial Settings', callback_data: `set_user_trial:${groupId}` }
+                        ]]
+                    };
+
+                    await ctx.reply(
+                        `✅ User trial duration set to ${trialDays} days and trials enabled successfully!`,
+                        { reply_markup: keyboard }
+                    );
+                    console.log('Trial duration update confirmation sent');
+                } catch (dbError) {
+                    console.error('Database error while saving trial duration:', dbError);
+                    await ctx.reply('Failed to save the trial duration. Please try again.');
                 }
                 return;
             }

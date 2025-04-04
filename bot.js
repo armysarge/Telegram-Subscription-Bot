@@ -7,6 +7,7 @@ const bodyParser = require('body-parser');
 
 // Import modules
 const userMiddleware = require('./middleware/userMiddleware');
+const subscriptionPermissionMiddleware = require('./middleware/subscriptionPermissionMiddleware');
 const commandHandlers = require('./controllers/commands');
 const groupHandlers = require('./controllers/groups');
 const messageHandlers = require('./controllers/messages');
@@ -79,11 +80,15 @@ mongoose.connect(process.env.MONGODB_URI, {
 
             // Also log chat and user info for debugging purposes
             if (ctx.chat) {
-                console.log('Chat info:', {
+                const chatInfo = {
                     id: ctx.chat.id,
                     type: ctx.chat.type,
                     title: ctx.chat.title
-                });
+                };
+                console.log('Chat info:', chatInfo);
+
+                // Store chat type in context for easier access in command handlers
+                ctx.chatType = ctx.chat.type;
             }
 
             if (ctx.from) {
@@ -102,6 +107,10 @@ mongoose.connect(process.env.MONGODB_URI, {
         console.log('Initializing user tracking middleware...');
         bot.use(userMiddleware);
         console.log('User tracking middleware initialized');
+
+        console.log('Initializing subscription permission middleware...');
+        bot.use(subscriptionPermissionMiddleware);
+        console.log('Subscription permission middleware initialized');
 
         // Register handlers with proper error handling
         console.log('Registering command handlers...');

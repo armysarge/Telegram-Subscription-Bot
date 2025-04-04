@@ -1,43 +1,56 @@
 const mongoose = require('mongoose');
 
-// Create group schema for group-specific settings
 const groupSchema = new mongoose.Schema({
     groupId: { type: Number, required: true, unique: true },
-    groupTitle: String,
-    adminUsers: [{ type: Number }], // User IDs who are admins for the group
-    subscriptionRequired: { type: Boolean, default: true },
-    welcomeMessage: String,
-    createdAt: { type: Date, default: Date.now },
-
-    // Group registration status
+    groupTitle: { type: String, required: true },
     isRegistered: { type: Boolean, default: false },
-    registrationDate: Date,
+    registrationDate: { type: Date },
+    subscriptionRequired: { type: Boolean, default: false },
+    subscriptionPrice: { type: Number },
+    subscriptionCurrency: { type: String, default: 'ZAR' },
+    paymentMethod: { type: String },
+    welcomeMessage: { type: String },
+    restrictNonSubsSending: { type: Boolean, default: false },
+    restrictNonSubsViewing: { type: Boolean, default: false },
 
-    // Trial period fields
+    // Trial related fields for the group
     trialActive: { type: Boolean, default: false },
-    trialStartDate: Date,
-    trialEndDate: Date,
+    trialStartDate: { type: Date },
+    trialEndDate: { type: Date },
 
-    // Group subscription settings
-    monthlyFee: { type: Number, default: 0 }, // Monthly fee paid to the bot owner
-    feeStatus: { type: String, enum: ['pending', 'paid', 'overdue'], default: 'pending' },
-    lastFeePaymentDate: Date,
-    nextFeePaymentDate: Date,
+    // New user trial settings
+    userTrialEnabled: { type: Boolean, default: false },
+    userTrialDays: { type: Number, default: 7 },
 
-    // Group payment settings for their users
-    paymentMethod: { type: String, default: 'payfast' }, // Default payment method
+    // Payment settings
+    feeStatus: { type: String, enum: ['paid', 'pending', 'overdue'], default: 'pending' },
+    nextFeePaymentDate: { type: Date },
+
+    // Custom payment settings by method
     customPaymentSettings: {
         payfast: {
             merchantId: String,
             merchantKey: String,
             passPhrase: String
-        },
-        // Can be extended for other payment providers
+        }
+        // Other payment methods can be added here
     },
 
-    // Subscription pricing for users
-    subscriptionPrice: { type: Number, default: 0 },
-    subscriptionCurrency: { type: String, default: 'ZAR' }
+    // Admin users
+    adminUsers: [Number],
+
+    // Meta
+    addedDate: { type: Date, default: Date.now },
+    addedBy: { type: Number },
+    lastEditDate: { type: Date, default: Date.now },
+    lastEditBy: { type: Number }
 });
 
-module.exports = mongoose.model('Group', groupSchema);
+// Create indexes for faster queries
+groupSchema.index({ groupId: 1 });
+groupSchema.index({ adminUsers: 1 });
+groupSchema.index({ isRegistered: 1, subscriptionRequired: 1, autoKickNonSubscribers: 1 });
+
+const Group = mongoose.model('Group', groupSchema);
+
+module.exports = Group;
