@@ -1,3 +1,18 @@
+[![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/armysarge/Telegram-Subscription-Bot)
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Donate-brightgreen?logo=buymeacoffee)](https://www.buymeacoffee.com/armysarge)
+
+[![NOdeJS](https://img.shields.io/badge/Node.js-v18.16.0-green.svg)](https://nodejs.org/en/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-v8.0.0-green.svg)](https://www.mongodb.com/)
+[![Telegram Bot API](https://img.shields.io/badge/Telegram%20Bot%20API-v8.3-blue.svg)](https://core.telegram.org/bots/api)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![GitHub issues](https://img.shields.io/github/issues/armysarge/Telegram-Subscription-Bot)](https://github.com/armysarge/Telegram-Subscription-Bot/issues)
+
+<div align="center">
+  <img src="logo.webp" alt="Logo" width="400px">
+</div>
+
 # 🤖 MonitizeRobot - Telegram Subscription Bot
 
 MonitizeRobot is a powerful, feature-rich Telegram bot designed to help group administrators manage subscription-based access to their groups.
@@ -40,10 +55,7 @@ MonitizeRobot is a powerful, feature-rich Telegram bot designed to help group ad
    BOT_TOKEN=your_telegram_bot_token
    MONGODB_URI=your_mongodb_connection_string
 
-   # Payment Gateway Configuration
-   PAYFAST_MERCHANT_ID=your_payfast_merchant_id
-   PAYFAST_MERCHANT_KEY=your_payfast_merchant_key
-   PAYFAST_PASSPHRASE=your_payfast_passphrase
+   # Payment Gateway Configuration (optional)
    PAYFAST_NOTIFY_URL=your_webhook_url
    ```
 
