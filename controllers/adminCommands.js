@@ -249,42 +249,38 @@ const register = (bot, paymentManager) => {
     });
 
     // Admin payment command
-    bot.command('admin_payment', async (ctx) => {
-        console.log('Admin payment command received');
+    bot.command("admin_payment", (async e => {
+        console.log("Admin payment command received");
         try {
-            // Verify admin status
-            const chatId = ctx.chat.id;
-            const isAdmin = await verifyAdmin(ctx, chatId);
+            const r = e.chat.id;
+            if (!await verifyAdmin(e, r)) return e.reply("Not authorized. You must be an admin to use this command.");
 
-            if (!isAdmin) {
-                return ctx.reply('Not authorized. You must be an admin to use this command.');
-            }
+            const t = await Group.findOne({groupId: r});
+            if (!t) return e.reply("Group not found in database");
 
-            const group = await Group.findOne({ groupId: chatId });
-            if (!group) {
-                return ctx.reply('Group not found in database');
-            }
+            // Get available payment gateways from config file
+            const paymentGatewaysConfig = require('../config/paymentGateways');
 
-            const keyboard = {
-                inline_keyboard: [
-                    [{ text: '💳 Configure PayFast', callback_data: `payment_method:${chatId}:payfast` }]
-                ]
+            // Create buttons for each available payment gateway
+            const gatewayButtons = paymentGatewaysConfig.availableGateways
+                .filter(gateway => gateway.enabled)
+                .map(gateway => [{
+                    text: `💳 Configure ${gateway.name}`,
+                    callback_data: `payment_method:${r}:${gateway.id}`
+                }]);
+
+            const n = {
+                inline_keyboard: gatewayButtons
             };
 
-            await ctx.reply(
-                `💵 *Payment Settings*\n\n` +
-                `Current Method: ${group.paymentMethod || 'Not set'}\n\n` +
-                `Select a payment method to configure:`,
-                {
-                    parse_mode: 'Markdown',
-                    reply_markup: keyboard
-                }
-            );
-        } catch (err) {
-            console.error('Error in admin_payment command:', err);
-            ctx.reply('An error occurred while managing payment settings');
+            await e.reply(`💵 *Payment Settings*\n\nCurrent Method: ${t.paymentMethod || "Not set"}\n\nSelect a payment method to configure:`, {
+                parse_mode: "Markdown",
+                reply_markup: n
+            });
+        } catch (r) {
+            console.error("Error in admin_payment command:", r), e.reply("An error occurred while managing payment settings")
         }
-    });
+    }));
 
     // Group management command
     bot.command('manage', async (ctx) => {
@@ -312,7 +308,7 @@ const register = (bot, paymentManager) => {
                         [{ text: '💰 Configure Subscription Settings', callback_data: `configure_group:${chatId}` }],
                         [{ text: '📋 View Current Settings', callback_data: `view_group_settings:${chatId}` }],
                         [{ text: '💬 Set Welcome Message', callback_data: `group:welcome:${chatId}` }],
-                        [{ text: '💳 Configure Payment Method', callback_data: `payment_method:${chatId}:payfast` }]
+                        [{ text: '💳 Configure Payment Methods', callback_data: `group_payment:${chatId}` }]
                     ]
                 }
             });

@@ -55,8 +55,15 @@ MonitizeRobot is a powerful, feature-rich Telegram bot designed to help group ad
    BOT_TOKEN=your_telegram_bot_token
    MONGODB_URI=your_mongodb_connection_string
 
-   # Payment Gateway Configuration (optional)
-   PAYFAST_NOTIFY_URL=your_webhook_url
+   # Payment Gateway Configuration
+   BASE_URL=https://your-server-domain.com
+   PORT=3000
+
+   # PayFast Configuration (if using PayFast)
+   PAYFAST_MERCHANT_ID=your_merchant_id
+   PAYFAST_MERCHANT_KEY=your_merchant_key
+   PAYFAST_PASSPHRASE=your_passphrase
+   PAYFAST_SANDBOX=true # Use false for production
    ```
 
 4. **Start the bot**
@@ -148,10 +155,28 @@ The bot provides detailed analytics on:
 
 ## 💲 Payment Gateway System
 
-The bot features a robust plugin-based payment gateway architecture that makes it easy to add new payment processors:
+The bot features a robust plugin-based payment gateway architecture with a centralized webhook system that makes it easy to add new payment processors:
 
 ### Supported Payment Gateways
 - **PayFast**: Complete integration with South African payment processor
+
+### Centralized Webhook System
+
+The bot now includes a unified webhook handling system that:
+
+- ✅ **Single Entry Point**: Provides a central endpoint for all payment gateway callbacks
+- 🔀 **Automatic Routing**: Routes webhook notifications to the appropriate payment provider
+- 🛡️ **Validation & Security**: Each provider handles its own signature validation and security checks
+- 🧩 **Extendable Design**: Makes adding new payment gateways simpler with standardized interfaces
+- 🔌 **Custom Routes**: Supports provider-specific webhook URLs when required
+
+### Webhook URLs
+
+Payment gateway callbacks will be received at:
+- Main endpoint: `https://your-server.com/api/payments/webhook/:provider`
+- PayFast endpoint: `https://your-server.com/api/payments/webhook/payfast-itn`
+
+A status endpoint is also available at `https://your-server.com/api/payments/webhook/status` that shows active payment providers.
 
 ### Payment Gateway Configuration
 
@@ -186,7 +211,7 @@ module.exports = {
 The system is designed with a modular approach that makes adding new payment gateways straightforward:
 
 1. **Define the Gateway**: Add the new gateway to `config/paymentGateways.js`
-2. **Implement Provider**: Create a new provider class in the `payment-providers` directory
+2. **Implement Provider**: Create a new provider class that extends `PaymentProvider` in the `payment-providers` directory
 3. **Register Provider**: Add the provider to the `bot.js` initialization
 
 #### Steps to Add a New Payment Gateway:
@@ -211,23 +236,46 @@ The system is designed with a modular approach that makes adding new payment gat
    };
    ```
 
-2. Create a new provider class:
+2. Create a new provider class that extends the base PaymentProvider:
    ```javascript
-   // In payment-providers/NewGatewayProvider.js
-   class NewGatewayProvider {
+   // In payment-providers/newgateway/NewGatewayProvider.js
+   const PaymentProvider = require('../PaymentProvider');
+
+   class NewGatewayProvider extends PaymentProvider {
      constructor(config) {
-       this.config = config;
+       super(config);
+       this.name = "newgateway";
      }
 
-     generatePaymentUrl(paymentData) {
+     // Generate payment URL for the payment gateway
+     generatePaymentUrl(userId, amount, itemName, itemDescription, options = {}) {
        // Implementation
      }
 
-     validatePayment(requestData) {
-       // Implementation
+     // Required method to handle webhook callbacks
+     async handleWebhook(req, successCallback) {
+       // Validate the webhook data
+       const isValid = await this.validatePayment(req.body);
+
+       if (!isValid) {
+         return { status: 400, body: 'Invalid payment data' };
+       }
+
+       // Process payment data
+       const paymentData = this.processPaymentData(req.body);
+
+       // Call success callback with payment data
+       await successCallback(paymentData);
+
+       return { status: 200, body: 'Payment processed successfully' };
      }
 
-     // ...other required methods
+     // Optional - Define a custom webhook path if needed
+     getCustomWebhookPath() {
+       return '/webhook/custom-newgateway-path';
+     }
+
+     // Other required methods...
    }
 
    module.exports = NewGatewayProvider;
@@ -235,16 +283,17 @@ The system is designed with a modular approach that makes adding new payment gat
 
 3. Register the provider in `bot.js`:
    ```javascript
-   const { NewGatewayProvider } = require('./payment-providers/NewGatewayProvider');
+   const NewGatewayProvider = require('./payment-providers/newgateway/NewGatewayProvider');
 
    // Configure provider
    const newGatewayConfig = {
      apiKey: process.env.NEW_GATEWAY_API_KEY,
-     secretKey: process.env.NEW_GATEWAY_SECRET_KEY
+     secretKey: process.env.NEW_GATEWAY_SECRET_KEY,
+     baseUrl: process.env.BASE_URL || 'https://your-server.com'
    };
 
-   // Register provider
-   paymentManager.registerProvider('newgateway', new NewGatewayProvider(newGatewayConfig), true);
+   // Register provider with paymentManager
+   paymentManager.registerProvider('newgateway', new NewGatewayProvider(newGatewayConfig));
    ```
 
 ### Payment Process Flow
@@ -253,8 +302,10 @@ The system is designed with a modular approach that makes adding new payment gat
 2. User selects payment method when subscribing
 3. Bot generates a payment URL using the selected gateway
 4. User completes payment on the provider's site
-5. Provider sends webhook notification back to the bot
-6. Bot validates the payment and activates the subscription
+5. Provider sends webhook notification back to the bot's unified webhook endpoint
+6. Webhook system routes the request to the appropriate provider
+7. Provider validates the payment and processes the data
+8. Bot activates the subscription when payment is confirmed
 
 ## 💾 Database Structure
 
@@ -267,3 +318,11 @@ Key collections:
 - `users` - Stores user data and subscription information
 - `groups` - Contains group settings, including auto-kick configuration
 - `payments` - Records payment transactions
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

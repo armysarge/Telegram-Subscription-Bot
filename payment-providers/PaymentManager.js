@@ -5,6 +5,8 @@ class PaymentManager {
     constructor() {
         this.providers = {};
         this.defaultProvider = null;
+        // Import the webhook handler
+        this.webhookHandler = require('./webhooks');
     }
 
     /**
@@ -15,6 +17,9 @@ class PaymentManager {
      */
     registerProvider(name, provider, isDefault = false) {
         this.providers[name] = provider;
+
+        // Also register the provider with the webhook handler
+        this.webhookHandler.registerProvider(name, provider);
 
         if (isDefault || !this.defaultProvider) {
             this.defaultProvider = name;
@@ -42,30 +47,32 @@ class PaymentManager {
      * Generate a payment URL using the specified provider
      * @param {string} providerName - Provider name (optional, uses default if not specified)
      * @param {number} userId - Telegram user ID
+     * @param {number} groupId - Telegram group ID
      * @param {number} amount - Payment amount
      * @param {string} itemName - Name of the subscription item
      * @param {string} itemDescription - Description of the subscription
      * @param {Object} options - Additional options for the payment
      * @returns {string} Payment URL
      */
-    generatePaymentUrl(providerName, userId, amount, itemName, itemDescription, options = {}) {
+    generatePaymentUrl(providerName, userId, groupId, amount, itemName, itemDescription, options = {}) {
         const provider = this.getProvider(providerName);
-        return provider.generatePaymentUrl(userId, amount, itemName, itemDescription, options);
+        return provider.generatePaymentUrl(userId, groupId, amount, itemName, itemDescription, options);
     }
 
     /**
      * Generate a subscription URL using the specified provider
      * @param {string} providerName - Provider name (optional, uses default if not specified)
      * @param {number} userId - Telegram user ID
+     * @param {number} groupId - Telegram group ID
      * @param {number} amount - Payment amount
      * @param {string} itemName - Name of the subscription item
      * @param {string} itemDescription - Description of the subscription
      * @param {Object} subscriptionOptions - Subscription specific parameters
      * @returns {string} Subscription URL
      */
-    generateSubscriptionUrl(providerName, userId, amount, itemName, itemDescription, subscriptionOptions = {}) {
+    generateSubscriptionUrl(providerName, userId, groupId, amount, itemName, itemDescription, subscriptionOptions = {}) {
         const provider = this.getProvider(providerName);
-        return provider.generateSubscriptionUrl(userId, amount, itemName, itemDescription, subscriptionOptions);
+        return provider.generateSubscriptionUrl(userId, groupId, amount, itemName, itemDescription, subscriptionOptions);
     }
 
     /**
@@ -96,10 +103,13 @@ class PaymentManager {
      * @param {Function} paymentSuccessCallback - Callback for successful payments
      */
     setupWebhooks(app, paymentSuccessCallback) {
-        for (const [name, provider] of Object.entries(this.providers)) {
-            provider.setupWebhook(app, paymentSuccessCallback);
-            console.log(`Set up webhook for ${name} payment provider`);
-        }
+        // Set the payment success callback in the webhook handler
+        this.webhookHandler.setPaymentSuccessCallback(paymentSuccessCallback);
+
+        // Initialize all webhook routes
+        this.webhookHandler.initializeRoutes(app);
+
+        console.log(`Payment webhook system initialized with ${Object.keys(this.providers).length} providers`);
     }
 }
 

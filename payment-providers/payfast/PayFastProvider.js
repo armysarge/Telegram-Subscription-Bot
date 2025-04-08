@@ -14,13 +14,14 @@ class PayFastProvider extends PaymentProvider {
     /**
      * Generate a payment URL for PayFast
      * @param {number} userId - Telegram user ID
+     * @param {number} groupId - Telegram group ID
      * @param {number} amount - Payment amount
      * @param {string} itemName - Name of the subscription item
      * @param {string} itemDescription - Description of the subscription
      * @param {Object} options - Additional options including subscription parameters
      * @returns {string} Payment URL
      */
-    generatePaymentUrl(userId, amount, itemName, itemDescription, options = {}) {
+    generatePaymentUrl(userId, groupId, amount, itemName, itemDescription, options = {}) {
         // Set merchant details from environment variables
         const merchantId = this.config.merchantId;
         const merchantKey = this.config.merchantKey;
@@ -32,7 +33,10 @@ class PayFastProvider extends PaymentProvider {
         // Set return and notify URLs
         const returnUrl = this.config.returnUrl || 'https://t.me/your_bot_username';
         const cancelUrl = this.config.cancelUrl || 'https://t.me/your_bot_username';
-        const notifyUrl = this.config.notifyUrl || 'https://your-server.com/payfast-itn';
+
+        // Use the new webhook URL format
+        const baseUrl = this.config.baseUrl || 'https://your-server.com';
+        const notifyUrl = this.config.notifyUrl || this.getWebhookUrl(baseUrl);
 
         // Format amount with 2 decimal places
         const formattedAmount = parseFloat(amount).toFixed(2);
@@ -56,7 +60,8 @@ class PayFastProvider extends PaymentProvider {
             'amount': formattedAmount,
             'item_name': itemName,
             'item_description': itemDescription,
-            'custom_str1': userId.toString()
+            'custom_str1': userId.toString(),
+            'custom_str2': groupId
         };
 
         // Add subscription parameters if this is a subscription
@@ -184,41 +189,85 @@ class PayFastProvider extends PaymentProvider {
 
     /**
      * Set up webhook route for PayFast ITN notifications
+     * @deprecated Use handleWebhook instead
      */
     setupWebhook(app, paymentSuccessCallback) {
+        console.warn('PayFastProvider: setupWebhook is deprecated, using handleWebhook with new webhook system');
+
+        // For backward compatibility, we'll register the old route
         app.post('/payfast-itn', async (req, res) => {
-            console.log('Received PayFast ITN:', req.body);
+            console.log('Received PayFast ITN via deprecated route:', req.body);
 
-            // Validate the ITN
-            if (await this.validatePayment(req.body)) {
-                const { payment_status } = req.body;
-
-                // Process both regular and subscription payments
-                if (payment_status === 'COMPLETE') {
-                    try {
-                        // Process the payment data
-                        const paymentData = this.processPaymentData(req.body);
-
-                        // Call the success callback
-                        await paymentSuccessCallback(paymentData);
-
-                        console.log(`Successfully processed PayFast payment for user ${paymentData.userId}`);
-                    } catch (error) {
-                        console.error('Error processing PayFast payment:', error);
-                    }
-                }
-                // Handle subscription notifications (for future payments in a subscription)
-                else if (req.body.payment_status === 'SUBSCRIPTION_CANCELLED') {
-                    console.log('Subscription cancelled:', req.body.subscription_id);
-                    // You could add a callback for subscription cancellations here
-                }
-
-                res.status(200).send('ITN Processed');
-            } else {
-                console.error('Invalid PayFast ITN');
-                res.status(400).send('Invalid ITN');
+            try {
+                const result = await this.handleWebhook(req, paymentSuccessCallback);
+                return res.status(result.status || 200).send(result.body || 'OK');
+            } catch (error) {
+                console.error('Error handling PayFast webhook:', error);
+                return res.status(500).send('Internal Server Error');
             }
         });
+    }
+
+    /**
+     * Get a custom webhook path for this provider
+     * @returns {string} Custom webhook path
+     */
+    getCustomWebhookPath() {
+        return '/webhook/payfast-itn';
+    }
+
+    /**
+     * Handle webhook requests from PayFast
+     * @param {Object} req - Express request object
+     * @param {Function} successCallback - Callback for successful payments
+     * @returns {Promise<Object>} Response object with status and body
+     */
+    async handleWebhook(req, successCallback) {
+        console.log('Processing PayFast webhook with payload:', req.body);
+
+        // Check for required fields
+        if (!req.body || !req.body.m_payment_id) {
+            console.error('PayFast webhook missing required fields');
+            return { status: 400, body: 'Missing required fields' };
+        }
+
+        // Validate the ITN
+        const isValid = await this.validatePayment(req.body);
+
+        if (!isValid) {
+            console.error('Invalid PayFast webhook payload');
+            return { status: 400, body: 'Invalid ITN' };
+        }
+
+        const { payment_status } = req.body;
+
+        // Process both regular and subscription payments
+        if (payment_status === 'COMPLETE') {
+            try {
+                // Process the payment data
+                const paymentData = this.processPaymentData(req.body);
+
+                // Call the success callback
+                if (successCallback) {
+                    await successCallback(paymentData);
+                }
+
+                console.log(`Successfully processed PayFast payment for user ${paymentData.userId}`);
+                return { status: 200, body: 'Payment processed successfully' };
+            } catch (error) {
+                console.error('Error processing PayFast payment:', error);
+                return { status: 500, body: 'Error processing payment' };
+            }
+        }
+        // Handle subscription notifications
+        else if (payment_status === 'SUBSCRIPTION_CANCELLED') {
+            console.log('Subscription cancelled:', req.body.subscription_id);
+            // You could add subscription cancellation handling here
+            return { status: 200, body: 'Subscription cancellation acknowledged' };
+        }
+
+        // For other statuses, just acknowledge receipt
+        return { status: 200, body: 'Notification received' };
     }
 
     /**
@@ -230,7 +279,7 @@ class PayFastProvider extends PaymentProvider {
      * @param {Object} subscriptionOptions - Subscription specific parameters
      * @returns {string} Subscription URL
      */
-    generateSubscriptionUrl(userId, amount, itemName, itemDescription, subscriptionOptions = {}) {
+    generateSubscriptionUrl(userId, groupId, amount, itemName, itemDescription, subscriptionOptions = {}) {
         // Format the billing date properly in YYYY-MM-DD format as required by PayFast
         const today = new Date();
         const billingDate = subscriptionOptions.billingDate ?
@@ -251,7 +300,7 @@ class PayFastProvider extends PaymentProvider {
             }
         };
 
-        return this.generatePaymentUrl(userId, amount, itemName, itemDescription, options);
+        return this.generatePaymentUrl(userId, groupId, amount, itemName, itemDescription, options);
     }
 
     /**
@@ -264,7 +313,7 @@ class PayFastProvider extends PaymentProvider {
         // Remove the signature field if it exists
         delete pfData.signature;
 
-                const keys = Object.keys(pfData);
+        const keys = Object.keys(pfData);
 
         // Initialize the signature string
         let signatureString = '';

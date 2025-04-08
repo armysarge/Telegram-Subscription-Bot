@@ -15,8 +15,8 @@ const callbackHandlers = require('./controllers/callbacks');
 const subscriptionUtils = require('./utils/subscriptionUtils');
 
 // Import payment provider system and gateway configuration
-const { PaymentManager, PayFastProvider } = require('./payment-providers');
-const paymentGatewaysConfig = require('./config/paymentGateways');
+const { PaymentManager } = require('./payment-providers');
+const paymentGatewaysConfig = require('./payment-providers/paymentGateways');
 
 // Load environment variables
 dotenv.config();
@@ -34,20 +34,35 @@ app.use(bodyParser.urlencoded({ extended: false }));
 // Initialize payment providers
 const paymentManager = new PaymentManager();
 
-// Configure PayFast provider with environment variables
-const payfastConfig = {
-    merchantId: process.env.PAYFAST_MERCHANT_ID,
-    merchantKey: process.env.PAYFAST_MERCHANT_KEY,
-    passPhrase: process.env.PAYFAST_PASSPHRASE,
-    testMode: process.env.NODE_ENV !== 'production'
-};
-
-// Add payment providers from configuration
+// Load payment providers dynamically from the configuration
 const enabledGateways = paymentGatewaysConfig.availableGateways.filter(gateway => gateway.enabled);
 console.log(`Loading ${enabledGateways.length} enabled payment gateways from config`);
 
-// Currently register PayFast manually but in the future can be expanded to load dynamically
-paymentManager.registerProvider('payfast', new PayFastProvider(payfastConfig), true);
+// Dynamically load and register each enabled payment provider
+enabledGateways.forEach(gateway => {
+    try {
+        // Import the provider class dynamically
+        [gateway.providerClass] = require(`./payment-providers/${gateway.id}/${gateway.providerClass}`);
+
+        // Configure the provider from environment variables
+        const providerConfig = {};
+        gateway.configParams.forEach(param => {
+            const envKey = `${gateway.id.toUpperCase()}_${param.toUpperCase()}`;
+            providerConfig[param] = process.env[envKey];
+        });
+
+        // Set test mode based on environment
+        providerConfig.testMode = process.env.NODE_ENV !== 'production';
+
+        // Create instance and register the provider
+        const provider = new [gateway.providerClass](providerConfig);
+        paymentManager.registerProvider(gateway.id, provider, gateway.default || false);
+
+        console.log(`Registered payment gateway: ${gateway.name}`);
+    } catch (error) {
+        console.error(`Failed to load payment provider '${gateway.name}':`, error);
+    }
+});
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI, {

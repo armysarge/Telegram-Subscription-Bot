@@ -91,11 +91,22 @@ const register = (bot) => {
             return ctx.answerCbQuery('Not authorized');
         }
 
+        // Get available payment gateways from config file
+        const paymentGatewaysConfig = require('../config/paymentGateways');
+
+        // Create buttons for each enabled payment gateway
+        const gatewayButtons = paymentGatewaysConfig.availableGateways
+            .filter(gateway => gateway.enabled)
+            .map(gateway => ([{
+                text: `💳 Configure ${gateway.name}`,
+                callback_data: `config_payment_${gateway.id}`
+            }]));
+
+        // Add back button
+        gatewayButtons.push([{ text: '◀️ Back to Admin Menu', callback_data: 'admin_back' }]);
+
         const keyboard = {
-            inline_keyboard: [
-                [{ text: '💳 Configure PayFast', callback_data: 'config_payfast' }],
-                [{ text: '◀️ Back to Admin Menu', callback_data: 'admin_back' }]
-            ]
+            inline_keyboard: gatewayButtons
         };
 
         await ctx.editMessageText('💵 *Payment Settings*:', {
@@ -462,27 +473,40 @@ const register = (bot) => {
                 { paymentMethod: method }
             );
 
-            // If method is PayFast, prompt for merchant details
-            if (method === 'payfast') {
-                ctx.session = ctx.session || {};
-                ctx.session.configuringPaymentFor = {
-                    groupId,
-                    step: 'merchant_id'
-                };
+            // Get payment gateway configuration
+            const paymentGatewaysConfig = require('../config/paymentGateways');
+            const gateway = paymentGatewaysConfig.availableGateways.find(g => g.id === method);
 
-                await ctx.answerCbQuery('PayFast selected as payment method');
-                await ctx.reply(
-                    `💳 *Configure PayFast*\n\n` +
-                    `Let's configure PayFast for your group.\n\n` +
-                    `Step 1/3: Please enter your PayFast Merchant ID.\n\n` +
-                    `If you don't have a PayFast account, you can sign up at https://www.payfast.co.za`,
-                    { parse_mode: 'Markdown' }
-                );
-            } else {
-                // For future payment methods
-                await ctx.answerCbQuery(`${method} selected as payment method`);
-                await ctx.reply(`${method} configuration will be implemented soon.`);
+            if (!gateway) {
+                return ctx.answerCbQuery(`Payment method ${method} not found in configuration`);
             }
+
+            // Initialize session for configuration
+            ctx.session = ctx.session || {};
+            ctx.session.configuringPaymentFor = {
+                groupId,
+                method,
+                configSteps: gateway.configSteps,
+                currentStepIndex: 0,
+                step: gateway.configSteps[0]
+            };
+
+            // Get the configuration prompt for the first step
+            const configStep = ctx.session.configuringPaymentFor.step;
+            const stepConfig = paymentGatewaysConfig.configStepTemplates[configStep] || {
+                prompt: `Please enter your ${configStep}`,
+                helpText: ''
+            };
+
+            await ctx.answerCbQuery(`${gateway.name} selected as payment method`);
+            await ctx.reply(
+                `💳 *Configure ${gateway.name}*\n\n` +
+                `Let's configure ${gateway.name} for your group.\n\n` +
+                `Step 1/${gateway.configSteps.length}: ${stepConfig.prompt}.\n\n` +
+                `${stepConfig.helpText ? `${stepConfig.helpText}\n\n` : ''}` +
+                `Type /cancel at any time to cancel this configuration.`,
+                { parse_mode: 'Markdown' }
+            );
         } catch (err) {
             console.error('Error in payment method selection:', err);
             await ctx.answerCbQuery('An error occurred');
@@ -508,12 +532,25 @@ const register = (bot) => {
                 return ctx.answerCbQuery('Please set a subscription price first');
             }
 
-            // For PayFast, make sure settings exist
-            if (group.paymentMethod === 'payfast') {
-                if (!group.customPaymentSettings?.payfast?.merchantId ||
-                    !group.customPaymentSettings?.payfast?.merchantKey) {
-                    return ctx.answerCbQuery('Please complete the PayFast configuration');
+            // Make sure the selected payment method is properly configured
+            if (group.paymentMethod) {
+                const paymentGatewaysConfig = require('../config/paymentGateways');
+                const gateway = paymentGatewaysConfig.availableGateways.find(g => g.id === group.paymentMethod);
+
+                if (gateway) {
+                    // Check if all required configuration steps are completed
+                    const isConfigured = gateway.configSteps.every(step => {
+                        // Skip passphrase check since it's optional
+                        if (step === 'passphrase') return true;
+                        return group.customPaymentSettings?.[group.paymentMethod]?.[step];
+                    });
+
+                    if (!isConfigured) {
+                        return ctx.answerCbQuery(`Please complete the ${gateway.name} configuration`);
+                    }
                 }
+            } else {
+                return ctx.answerCbQuery('Please select a payment method');
             }
 
             // Calculate trial period dates
@@ -752,9 +789,9 @@ const register = (bot) => {
                 return;
             }
 
-            // Handle PayFast configuration
+            // Handle payment gateway configuration
             if (ctx.session?.configuringPaymentFor) {
-                const { groupId, step } = ctx.session.configuringPaymentFor;
+                const { groupId, method, step, configSteps, currentStepIndex } = ctx.session.configuringPaymentFor;
 
                 // Handle cancel command
                 if (messageText.toLowerCase() === '/cancel') {
@@ -764,51 +801,35 @@ const register = (bot) => {
                             { text: 'Back to Payment Settings', callback_data: `group_payment:${groupId}` }
                         ]]
                     };
-                    return ctx.reply('PayFast configuration canceled.', { reply_markup: keyboard });
+                    return ctx.reply(`Payment configuration canceled.`, { reply_markup: keyboard });
                 }
 
-                if (step === 'merchant_id') {
-                    // Update merchant ID and move to next step
+                // Get the gateway configuration
+                const paymentGatewaysConfig = require('../config/paymentGateways');
+                const gateway = paymentGatewaysConfig.availableGateways.find(g => g.id === method);
+
+                if (!gateway) {
+                    delete ctx.session.configuringPaymentFor;
+                    return ctx.reply(`Payment gateway configuration not found.`);
+                }
+
+                // Create the path for storing configuration
+                const configPath = `customPaymentSettings.${method}.${step}`;
+
+                // Special handling for "skip" on optional parameters
+                if (messageText.toLowerCase() === 'skip' && step === 'passphrase') {
+                    // Skip this step without saving anything
+                } else {
+                    // Save the current step's value
                     await Group.findOneAndUpdate(
                         { groupId },
-                        { $set: { 'customPaymentSettings.payfast.merchantId': messageText } },
+                        { $set: { [configPath]: messageText } },
                         { upsert: true }
                     );
+                }
 
-                    // Update session to next step
-                    ctx.session.configuringPaymentFor.step = 'merchant_key';
-
-                    await ctx.reply(
-                        `PayFast Merchant ID saved.\n\n` +
-                        `Step 2/3: Please enter your PayFast Merchant Key.\n\n` +
-                        `Type /cancel at any time to cancel this configuration.`
-                    );
-                } else if (step === 'merchant_key') {
-                    // Update merchant key and move to final step
-                    await Group.findOneAndUpdate(
-                        { groupId },
-                        { $set: { 'customPaymentSettings.payfast.merchantKey': messageText } },
-                        { upsert: true }
-                    );
-
-                    // Update session to next step
-                    ctx.session.configuringPaymentFor.step = 'passphrase';
-
-                    await ctx.reply(
-                        `PayFast Merchant Key saved.\n\n` +
-                        `Step 3/3: Please enter your PayFast Passphrase (or type "skip" if you don't have one).\n\n` +
-                        `Type /cancel at any time to cancel this configuration.`
-                    );
-                } else if (step === 'passphrase') {
-                    // Only save passphrase if not "skip"
-                    if (messageText.toLowerCase() !== 'skip') {
-                        await Group.findOneAndUpdate(
-                            { groupId },
-                            { $set: { 'customPaymentSettings.payfast.passPhrase': messageText } },
-                            { upsert: true }
-                        );
-                    }
-
+                // Check if this was the last step
+                if (currentStepIndex >= configSteps.length - 1) {
                     // Configuration complete
                     delete ctx.session.configuringPaymentFor;
 
@@ -819,11 +840,30 @@ const register = (bot) => {
                         ]]
                     };
 
-                    await ctx.reply(
-                        `✅ PayFast configuration complete!\n\nClick below to continue with the registration:`,
+                    return ctx.reply(
+                        `✅ ${gateway.name} configuration complete!\n\nClick below to continue with the registration:`,
                         { reply_markup: keyboard }
                     );
                 }
+
+                // Move to the next step
+                const nextStepIndex = currentStepIndex + 1;
+                const nextStep = configSteps[nextStepIndex];
+                ctx.session.configuringPaymentFor.currentStepIndex = nextStepIndex;
+                ctx.session.configuringPaymentFor.step = nextStep;
+
+                // Get the next step configuration
+                const nextStepConfig = paymentGatewaysConfig.configStepTemplates[nextStep] || {
+                    prompt: `Please enter your ${nextStep}`,
+                    helpText: ''
+                };
+
+                await ctx.reply(
+                    `${step.charAt(0).toUpperCase() + step.slice(1)} saved.\n\n` +
+                    `Step ${nextStepIndex + 1}/${configSteps.length}: ${nextStepConfig.prompt}.\n\n` +
+                    `${nextStepConfig.helpText ? `${nextStepConfig.helpText}\n\n` : ''}` +
+                    `Type /cancel at any time to cancel this configuration.`
+                );
                 return;
             }
 
@@ -842,9 +882,17 @@ const register = (bot) => {
             return ctx.answerCbQuery('You are already subscribed!');
         }
 
+        // Get default payment method from config
+        const paymentGatewaysConfig = require('../config/paymentGateways');
+        const defaultGateway = paymentGatewaysConfig.availableGateways.find(g => g.default) ||
+                              paymentGatewaysConfig.availableGateways[0];
+
+        const paymentMethodName = defaultGateway?.name || 'Default';
+        const paymentMethodId = defaultGateway?.id || 'default';
+
         const keyboard = {
             inline_keyboard: [
-                [{ text: 'Pay with PayFast', callback_data: 'pay_payfast' }],
+                [{ text: `Pay with ${paymentMethodName}`, callback_data: `pay_${paymentMethodId}` }],
                 [{ text: 'Cancel', callback_data: 'subscribe_cancel' }]
             ]
         };
@@ -882,20 +930,25 @@ const register = (bot) => {
                 return ctx.answerCbQuery('You are already subscribed to this group');
             }
 
-            // Set up payment options based on group's configured payment method
-            let paymentButtons = [];
-
-            if (group.paymentMethod === 'payfast') {
-                paymentButtons.push({
-                    text: 'Pay with PayFast',
-                    callback_data: `pay_group_payfast:${groupId}`
-                });
+            // Check if the group has a payment method configured
+            if (!group.paymentMethod) {
+                return ctx.answerCbQuery('No payment method configured for this group');
             }
-            // Add other payment methods as they're supported
+
+            // Set up payment button based on the group's configured payment method
+            const paymentCallback = `pay_group_${group.paymentMethod}:${groupId}`;
+
+            // Get display name for the payment method
+            const paymentGatewaysConfig = require('../config/paymentGateways');
+            const gateway = paymentGatewaysConfig.availableGateways.find(g => g.id === group.paymentMethod);
+            const paymentMethodName = gateway?.name || group.paymentMethod.charAt(0).toUpperCase() + group.paymentMethod.slice(1);
 
             const keyboard = {
                 inline_keyboard: [
-                    paymentButtons,
+                    [{
+                        text: `Pay with ${paymentMethodName}`,
+                        callback_data: paymentCallback
+                    }],
                     [{ text: 'Cancel', callback_data: 'subscribe_cancel' }]
                 ]
             };
@@ -912,10 +965,11 @@ const register = (bot) => {
         }
     });
 
-    // Handle PayFast payment for a specific group
-    bot.action(/^pay_group_payfast:(.+)$/, async (ctx) => {
+    // Handle payment for a specific group - dynamic handler based on payment method
+    bot.action(/^pay_group_([^:]+):(.+)$/, async (ctx) => {
         try {
-            const groupId = parseInt(ctx.match[1]);
+            const paymentMethod = ctx.match[1];
+            const groupId = parseInt(ctx.match[2]);
 
             // Get group details
             const group = await Group.findOne({ groupId });
@@ -923,51 +977,65 @@ const register = (bot) => {
                 return ctx.answerCbQuery('Group not found');
             }
 
-            // Make sure the group has PayFast configured
-            if (group.paymentMethod !== 'payfast' ||
-                !group.customPaymentSettings?.payfast?.merchantId ||
-                !group.customPaymentSettings?.payfast?.merchantKey) {
+            // Make sure the group has necessary payment information configured
+            if (!group.paymentMethod ||
+                !group.customPaymentSettings?.[group.paymentMethod]) {
                 return ctx.answerCbQuery('Payment method not properly configured');
             }
 
-            // Create a custom PayFast configuration for this group
-            const payfastConfig = {
-                merchantId: group.customPaymentSettings.payfast.merchantId,
-                merchantKey: group.customPaymentSettings.payfast.merchantKey,
-                passPhrase: group.customPaymentSettings.payfast.passPhrase || '',
-                testMode: process.env.NODE_ENV !== 'production'
-            };
+            try {
+                // Access the payment manager
+                const { PaymentManager } = require('../payment-providers');
+                const paymentManager = new PaymentManager();
 
-            // Use payment manager to generate a payment URL
-            // Note: The actual implementation might differ based on your payment system
-            const paymentData = {
-                amount: group.subscriptionPrice,
-                item_name: `Subscription to ${group.groupTitle}`,
-                user_id: ctx.from.id,
-                group_id: group.groupId,
-                return_url: `https://t.me/${ctx.me.username}?start=payment_success_${groupId}`,
-                cancel_url: `https://t.me/${ctx.me.username}?start=payment_cancel_${groupId}`,
-                notify_url: process.env.PAYFAST_NOTIFY_URL
-            };
+                // Get the provider based on the group's payment method
+                const provider = paymentManager.getProvider(group.paymentMethod);
 
-            // This is a placeholder - your actual implementation would depend on how your payment system works
-            const paymentUrl = `https://www.payfast.co.za/eng/process?merchant_id=${payfastConfig.merchantId}&merchant_key=${payfastConfig.merchantKey}&amount=${group.subscriptionPrice}&item_name=${encodeURIComponent(`Subscription to ${group.groupTitle}`)}&custom_str1=${ctx.from.id}&custom_str2=${groupId}`;
+                if (!provider) {
+                    return ctx.answerCbQuery(`Payment provider ${group.paymentMethod} is not available`);
+                }
 
-            const keyboard = {
-                inline_keyboard: [
-                    [{ text: 'Pay Now', url: paymentUrl }],
-                    [{ text: 'Cancel', callback_data: 'subscribe_cancel' }]
-                ]
-            };
+                // Create payment data
+                const paymentData = {
+                    amount: group.subscriptionPrice,
+                    itemName: `Subscription to ${group.groupTitle}`,
+                    itemDescription: `Monthly subscription payment for ${group.groupTitle}`,
+                    userId: ctx.from.id,
+                    groupId: group.groupId,
+                    returnUrl: `https://t.me/${ctx.me.username}?start=payment_success_${groupId}`,
+                    cancelUrl: `https://t.me/${ctx.me.username}?start=payment_cancel_${groupId}`,
+                    notifyUrl: process.env.PAYMENT_NOTIFY_URL || process.env[`${group.paymentMethod.toUpperCase()}_NOTIFY_URL`],
+                    providerConfig: group.customPaymentSettings[group.paymentMethod]
+                };
 
-            await ctx.editMessageText(
-                `Complete your payment for ${group.groupTitle}\n\n` +
-                `Amount: ${group.subscriptionPrice} ${group.subscriptionCurrency}\n\n` +
-                `Click the button below to complete payment with PayFast:`,
-                { reply_markup: keyboard }
-            );
+                // Generate payment URL using the provider
+                const paymentUrl = provider.generatePaymentUrl(
+                    paymentData.userId,
+                    paymentData.amount,
+                    paymentData.itemName,
+                    paymentData.itemDescription,
+                    paymentData.providerConfig
+                );
+
+                const keyboard = {
+                    inline_keyboard: [
+                        [{ text: 'Pay Now', url: paymentUrl }],
+                        [{ text: 'Cancel', callback_data: 'subscribe_cancel' }]
+                    ]
+                };
+
+                await ctx.editMessageText(
+                    `Complete your payment for ${group.groupTitle}\n\n` +
+                    `Amount: ${group.subscriptionPrice} ${group.subscriptionCurrency}\n\n` +
+                    `Click the button below to complete payment:`,
+                    { reply_markup: keyboard }
+                );
+            } catch (err) {
+                console.error(`Error generating payment URL: ${err.message}`);
+                await ctx.answerCbQuery('Unable to generate payment URL. Please try again later.');
+            }
         } catch (err) {
-            console.error('Error in pay_group_payfast callback:', err);
+            console.error(`Error in pay_group_${ctx.match[1]} callback:`, err);
             await ctx.answerCbQuery('An error occurred');
         }
     });
@@ -1169,11 +1237,22 @@ const register = (bot) => {
                 return ctx.answerCbQuery('Group not found in database');
             }
 
+            // Get available payment gateways from config file
+            const paymentGatewaysConfig = require('../config/paymentGateways');
+
+            // Create buttons for each enabled payment gateway
+            const gatewayButtons = paymentGatewaysConfig.availableGateways
+                .filter(gateway => gateway.enabled)
+                .map(gateway => ([{
+                    text: `💳 Configure ${gateway.name}`,
+                    callback_data: `payment_method:${groupId}:${gateway.id}`
+                }]));
+
+            // Add back button
+            gatewayButtons.push([{ text: '◀️ Back to Group Management', callback_data: `manage_group:${groupId}` }]);
+
             const keyboard = {
-                inline_keyboard: [
-                    [{ text: '💳 Configure PayFast', callback_data: `payment_method:${groupId}:payfast` }],
-                    [{ text: '◀️ Back to Group Management', callback_data: `manage_group:${groupId}` }]
-                ]
+                inline_keyboard: gatewayButtons
             };
 
             await ctx.editMessageText(
@@ -1254,7 +1333,7 @@ const register = (bot) => {
                     reply_markup: keyboard
                 }
             );
-        } catch (err) {
+        } catch ( err) {
             console.error('Error in group_toggle callback:', err);
             await ctx.answerCbQuery('An error occurred');
         }
