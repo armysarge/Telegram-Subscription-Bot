@@ -22,6 +22,11 @@ const groupSchema = new mongoose.Schema({
     userTrialEnabled: { type: Boolean, default: false },
     userTrialDays: { type: Number, default: 7 },
 
+    // Monetization date - when subscription requirement was first enabled
+    monetizationDate: { type: Date },
+    // Grace period for existing users (in hours)
+    existingUserGracePeriod: { type: Number, default: 24 },
+
     // Payment settings
     feeStatus: { type: String, enum: ['paid', 'pending', 'overdue'], default: 'pending' },
     nextFeePaymentDate: { type: Date },

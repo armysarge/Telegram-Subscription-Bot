@@ -1,5 +1,6 @@
 const User = require('../models/user');
 const Group = require('../models/group');
+const { cleanupMessages, DEFAULT_DELETE_DELAY } = require('../utils/messageCleanup');
 
 // User command handlers
 const register = (bot, paymentManager) => {
@@ -86,7 +87,7 @@ const register = (bot, paymentManager) => {
             console.error('Error checking admin status:', err);
         }
 
-        const message = '🤖 *Welcome to the Subscription Bot!*\n\n'
+        let message = '🤖 *Welcome to the Subscription Bot!*\n\n'
             + 'MonitizeRobot bot helps manage subscriptions for groups.\n\n'
             + '*Available commands:*\n';
 
@@ -174,10 +175,10 @@ const register = (bot, paymentManager) => {
         try {
             if (chat.type !== 'private') {
                 const admins = await ctx.telegram.getChatAdministrators(chat.id);
-                isAdmin = admins.some(admin => admin.user.id === ctx.from.id);
-
-                if (isAdmin) {
-                    return ctx.reply('As an admin, you automatically have full access to this group. No subscription is needed.');
+                isAdmin = admins.some(admin => admin.user.id === ctx.from.id);                if (isAdmin) {
+                    const adminMsg = await ctx.reply('As an admin, you automatically have full access to this group. No subscription is needed.');
+                    cleanupMessages(ctx, adminMsg);
+                    return;
                 }
             }
         } catch (err) {
@@ -220,11 +221,15 @@ const register = (bot, paymentManager) => {
         // In groups, check if subscription is required
         const group = await Group.findOne({ groupId: chat.id });
         if (!group?.subscriptionRequired) {
-            return ctx.reply('Subscriptions are not required in this group.');
+            const notRequiredMsg = await ctx.reply('Subscriptions are not required in this group.');
+            cleanupMessages(ctx, notRequiredMsg);
+            return;
         }
 
         if (!group.isRegistered) {
-            return ctx.reply('This group has not been registered for subscription services yet.');
+            const notRegisteredMsg = await ctx.reply('This group has not been registered for subscription services yet.');
+            cleanupMessages(ctx, notRegisteredMsg);
+            return;
         }
 
         // Check if user is already subscribed to this group
@@ -240,43 +245,92 @@ const register = (bot, paymentManager) => {
             const groupSub = user.groupSubscriptions.find(sub =>
                 sub.groupId === chat.id && sub.isSubscribed);
 
-            return ctx.reply(
+            const alreadySubMsg = await ctx.reply(
                 `You are already subscribed to this group.\n` +
                 `Your subscription is active until: ${groupSub.subscriptionExpiresAt.toLocaleDateString()}`
             );
-        }
-
-        // Direct them to private chat with deep link
+            cleanupMessages(ctx, alreadySubMsg);
+            return;
+        }        // Direct them to private chat with deep link
         const keyboard = {
             inline_keyboard: [[{
                 text: '💬 Subscribe in Private Chat',
                 url: `https://t.me/${ctx.me.username}?start=subscribe_group_${chat.id}`
             }]]
         };
-        await ctx.reply('🔒 This group requires a subscription. Please click below to subscribe in a private chat:', { reply_markup: keyboard });
-    });
+        const subscribeMsg = await ctx.reply('🔒 This group requires a subscription. Please click below to subscribe in a private chat:',
+            { reply_markup: keyboard }
+        );
 
-    // Status command
+        // Auto-delete the message after 30 seconds (longer than standard to give users time to click)
+        cleanupMessages(ctx, subscribeMsg, 30000);
+    });    // Status command
     bot.command('status', async (ctx) => {
         const user = await User.findOne({ userId: ctx.from.id });
+        const chat = await ctx.getChat();
+        const userId = ctx.from.id;
 
-        if (!user) {
-            return ctx.reply('You have no subscription history.');
+        // If in a group, send the status privately instead of in the group
+        if (chat.type === 'group' || chat.type === 'supergroup') {
+            try {
+                // Check admin status
+                let isAdmin = false;
+                try {
+                    const admins = await ctx.telegram.getChatAdministrators(chat.id);
+                    isAdmin = admins.some(admin => admin.user.id === userId);
+                } catch (err) {
+                    console.error('Error checking admin status in status command:', err);
+                }
+
+                let statusMessage = '';
+
+                // Prepare status message based on admin status and subscription
+                if (isAdmin) {
+                    statusMessage = `👑 *As a group admin of ${chat.title}, you have permanent access to this group*\n\n` +
+                        'You do not need a subscription as long as you maintain admin status.';
+                } else if (!user) {
+                    statusMessage = `You have no subscription history for ${chat.title}.`;
+                } else {
+                    const groupSub = user.groupSubscriptions?.find(sub => sub.groupId === chat.id);
+
+                    if (!groupSub || !groupSub.isSubscribed) {
+                        statusMessage = `You are not currently subscribed to ${chat.title}.`;
+                    } else {
+                        statusMessage = `Your subscription to ${chat.title} is active until: ${groupSub.subscriptionExpiresAt.toLocaleDateString()}`;
+                    }
+                }                // Send the status as a private message
+                await ctx.telegram.sendMessage(
+                    userId,
+                    statusMessage,
+                    { parse_mode: 'Markdown' }
+                );
+
+                // Send a brief confirmation in the group that status was sent privately
+                const replyMessage = await ctx.reply(`I've sent your subscription status in a private message.`);
+
+                // Auto-delete both the command and reply message after 10 seconds
+                cleanupMessages(ctx, replyMessage);
+            } catch (err) {
+                // If we can't send private message (user hasn't started the bot), suggest they start the bot
+                if (err.description && err.description.includes("bot can't initiate conversation with a user")) {
+                    const errorMsg = await ctx.reply(
+                        `@${ctx.from.username || ctx.from.first_name}, I couldn't send you a private message. ` +
+                        `Please start a private chat with me first by clicking @${ctx.botInfo.username} and pressing START.`
+                    );
+                    // Auto-delete this message too
+                    cleanupMessages(ctx, errorMsg, 30000); // Keep error messages a bit longer (30 seconds)
+                } else {
+                    console.error('Error sending private status message:', err);
+                    const errorMsg = await ctx.reply('An error occurred while checking your status. Please try again later.');
+                    cleanupMessages(ctx, errorMsg);
+                }
+            }
+            return;
         }
 
-        const chat = await ctx.getChat();
-
-        // If in a group, show status for that specific group
-        if (chat.type === 'group' || chat.type === 'supergroup') {
-            const groupSub = user.groupSubscriptions?.find(sub => sub.groupId === chat.id);
-
-            if (!groupSub || !groupSub.isSubscribed) {
-                return ctx.reply('You are not currently subscribed to this group.');
-            }
-
-            return ctx.reply(
-                `Your subscription to this group is active until: ${groupSub.subscriptionExpiresAt.toLocaleDateString()}`
-            );
+        // For private chat status checks
+        if (!user) {
+            return ctx.reply('You have no subscription history.');
         }
 
         // If in private chat, show all group subscriptions

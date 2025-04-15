@@ -1290,15 +1290,37 @@ const register = (bot) => {
                 return ctx.answerCbQuery('Please register the group first');
             }
 
-            // Toggle subscription requirement
-            await Group.findOneAndUpdate(
+            const wasSubscriptionRequired = group.subscriptionRequired;
+            const newSubscriptionRequired = !wasSubscriptionRequired;
+
+            // Set monetization date when enabling subscription for the first time or after it was disabled
+            const updateData = { subscriptionRequired: newSubscriptionRequired };
+
+            // If we're enabling subscription, set monetization date
+            if (newSubscriptionRequired && !wasSubscriptionRequired) {
+                updateData.monetizationDate = new Date();
+                console.log(`Setting monetization date for group ${groupId}`);
+            }            await Group.findOneAndUpdate(
                 { groupId },
-                { subscriptionRequired: !group.subscriptionRequired }
+                updateData
             );
 
             await ctx.answerCbQuery(
-                `Subscription requirement ${!group.subscriptionRequired ? 'enabled' : 'disabled'}`
+                `Subscription requirement ${newSubscriptionRequired ? '✅ enabled' : '❌ disabled'}`
             );
+
+            // If subscription was just enabled, notify users in the group
+            if (newSubscriptionRequired && !wasSubscriptionRequired) {
+                try {
+                    // Import the notification utility
+                    const { notifyUsersAboutMonetization } = require('../utils/notificationUtils');
+
+                    // Send notifications to existing users about monetization with 24-hour grace period
+                    await notifyUsersAboutMonetization(ctx, groupId, group);
+                } catch (notifyError) {
+                    console.error('Error sending monetization notifications:', notifyError);
+                }
+            }
 
             // Refresh the settings view by directly rendering it instead of using trigger
             const updatedGroup = await Group.findOne({ groupId });
@@ -1578,8 +1600,8 @@ const register = (bot) => {
                 parse_mode: 'Markdown',
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: '🔒 Subscription Required', callback_data: `set_group_sub:${groupId}:required` }],
-                        [{ text: '🔓 Subscription Optional', callback_data: `set_group_sub:${groupId}:optional` }],
+                        [{ text: '🔒 Set Subscriptions as Required', callback_data: `set_group_sub:${groupId}:required` }],
+                        [{ text: '🔓 Set Subscriptions as Optional', callback_data: `set_group_sub:${groupId}:optional` }],
                         [{ text: `${updatedRestrictSending ? '✅ Allow' : '🚫 Restrict'} Non-subscribers Sending Messages`, callback_data: `set_group_restrict_sending:${groupId}:${!updatedRestrictSending}` }],
                         [{ text: `${restrictViewing ? '✅ Allow' : '🚫 Restrict'} Non-subscribers Viewing Messages`, callback_data: `set_group_restrict_viewing:${groupId}:${!restrictViewing}` }],
                         [{ text: `${group.userTrialEnabled ? '🔄 Update' : '🆕 Enable'} User Trial Period`, callback_data: `set_user_trial:${groupId}` }],
@@ -1629,8 +1651,8 @@ const register = (bot) => {
                 parse_mode: 'Markdown',
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: '🔒 Subscription Required', callback_data: `set_group_sub:${groupId}:required` }],
-                        [{ text: '🔓 Subscription Optional', callback_data: `set_group_sub:${groupId}:optional` }],
+                        [{ text: '🔒 Set Subscriptions as Required', callback_data: `set_group_sub:${groupId}:required` }],
+                        [{ text: '🔓 Set Subscriptions as Optional', callback_data: `set_group_sub:${groupId}:optional` }],
                         [{ text: `${restrictSending ? '✅ Allow' : '🚫 Restrict'} Non-subscribers Sending Messages`, callback_data: `set_group_restrict_sending:${groupId}:${!restrictSending}` }],
                         [{ text: `${updatedRestrictViewing ? '✅ Allow' : '🚫 Restrict'} Non-subscribers Viewing Messages`, callback_data: `set_group_restrict_viewing:${groupId}:${!updatedRestrictViewing}` }],
                         [{ text: `${group.userTrialEnabled ? '🔄 Update' : '🆕 Enable'} User Trial Period`, callback_data: `set_user_trial:${groupId}` }],

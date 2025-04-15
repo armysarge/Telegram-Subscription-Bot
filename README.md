@@ -28,6 +28,26 @@ MonitizeRobot is a powerful, feature-rich Telegram bot designed to help group ad
 - 🆓 **User Trial Periods**: Automatically grant trial access to new group members
 - 🧩 **Modular Design**: Easily extendable for additional features
 
+## 📆 Recent Updates
+
+### Grace Period for Existing Members (April 15, 2025)
+
+A new feature has been added to improve user experience when a group is first monetized:
+
+#### Grace Period Feature
+- **24-Hour Transition Period**: When subscription requirement is first enabled for a group, existing members get a 24-hour grace period before restrictions apply
+- **Smart Detection**: Bot automatically identifies which users were members before monetization
+- **Automatic Notifications**: Both group-wide announcements and individual DMs are sent to notify members about the upcoming requirement
+- **Configurable Duration**: Group admins can adjust the grace period duration (default is 24 hours)
+
+#### Technical Implementation
+- New `monetizationDate` field added to track when subscription was first enabled
+- New `existingUserGracePeriod` field to configure grace period duration
+- Enhanced subscription permission middleware to respect the grace period
+- Automated notification system to alert users about the change
+
+This enhancement ensures a smoother transition for community members when a group switches to a subscription model.
+
 ## 🚀 Getting Started
 
 ### Prerequisites

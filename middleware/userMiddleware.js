@@ -43,9 +43,18 @@ module.exports = async (ctx, next) => {
                         }
                     );
 
-                    // Check if this group has user trials enabled
+                    // Check if this group has subscription settings
                     const group = await Group.findOne({ groupId: chatId });
 
+                    // Get the user's display name (username or first name)
+                    const username = ctx.from.username
+                        ? `@${ctx.from.username}`
+                        : ctx.from.first_name || 'New member';
+
+                    // Always send a welcome message in the group first
+                    let welcomeMessage = `👋 ${username}, welcome to ${ctx.chat.title}!`;
+
+                    // If trials are enabled and subscription is required, set up the trial
                     if (group && group.userTrialEnabled && group.subscriptionRequired) {
                         console.log(`Applying ${group.userTrialDays}-day trial for user ${userId} in group ${chatId}`);
 
@@ -71,20 +80,35 @@ module.exports = async (ctx, next) => {
                             }
                         );
 
-                        // Notify the user about their trial (in private chat to avoid group spam)
+                        // Add trial information to the welcome message
+                        welcomeMessage += `\n\nA ${group.userTrialDays}-day free trial is available for you.`;
+                    }                    // Always add the instruction to start a private chat with the bot
+                    welcomeMessage += `\n\n*Important:* Please start a private chat with me by clicking @${ctx.botInfo.username} and pressing START to ${group && group.userTrialEnabled ? 'unlock your trial and ' : ''}receive important notifications.`;
+
+                    // Send the welcome message in the group
+                    await ctx.reply(
+                        welcomeMessage,
+                        {
+                            parse_mode: 'Markdown',
+                            disable_notification: false // Make this notification visible
+                        }
+                    );
+
+                    // If trial is enabled, also try to send a private message, but don't worry if it fails
+                    if (group && group.userTrialEnabled && group.subscriptionRequired) {
                         try {
                             await ctx.telegram.sendMessage(
                                 userId,
-                                `🎉 *Welcome to ${ctx.chat.title}!*\\n\\n` +
-                                `You've been granted a ${group.userTrialDays}-day free trial subscription to this group.\\n\\n` +
-                                `Your trial will expire on ${trialEndDate.toLocaleDateString()}.\\n\\n` +
+                                `🎉 *Welcome to ${ctx.chat.title.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&')}*\n\n` +
+                                `You've been granted a ${group.userTrialDays}-day free trial subscription to this group.\n\n` +
+                                `Your trial will expire on ${trialEndDate.toLocaleDateString()}.\n\n` +
                                 `To continue accessing the group after your trial, you'll need to subscribe using the /subscribe command.`,
-                                { parse_mode: 'Markdown' }
+                                { parse_mode: 'MarkdownV2' }
                             );
+                            console.log(`Successfully sent private trial message to user ${userId}`);
                         } catch (dmError) {
-                            console.error('Could not send trial notification to user:', dmError);
-                            // Failed to DM the user, possibly because they haven't started the bot
-                            // We could fall back to a group message, but that might be spammy
+                            console.log(`Could not send private trial message to user ${userId}, but group welcome was sent.`);
+                            // No need to handle this error further since we already sent a group message
                         }
                     }
                 }
